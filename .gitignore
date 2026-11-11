@@ -1,0 +1,35 @@
+# --- Secretos ---
+# Credenciales del WiFi y de Supabase: NUNCA se suben.
+firmware/**/secrets.h
+app/src/config.ts
+app/config.local.ts
+
+# --- Dependencias ---
+node_modules/
+app/node_modules/
+app/android/.gradle/
+app/android/app/build/
+app/android/build/
+app/android/.cxx/
+app/android/app/.cxx/
+app/ios/Pods/
+app/ios/build/
+
+# --- Logs de compilacion (grandes y sin valor) ---
+app/build_*.log
+app/*.log
+
+# --- Sistema y editores ---
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+*.iml
+
+# --- Android local ---
+app/android/local.properties
+app/android/app/debug/
+app/android/app/release/
+*.keystore
+!debug.keystore
