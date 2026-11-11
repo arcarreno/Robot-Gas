@@ -1,25 +1,25 @@
 # Robot-Gas
 
-**Etapa de comunicación WiFi para un vehículo terrestre autónomo**
+**Etapa de comunicacion WiFi para un vehiculo terrestre autonomo**
 
-Robot autónomo con ESP32 que detecta gas (MQ-2), se mueve solo evitando
-obstáculos y reporta su estado en tiempo real a una app Android por WiFi
-(a través de Supabase).
+Robot autonomo con ESP32 que detecta gas (MQ-2), se mueve solo evitando
+obstaculos y reporta su estado en tiempo real a una app Android por WiFi
+(a traves de Supabase).
 
-- **Estudiante:** Angel Armando Carreño González
-- **Investigadora:** Alba Maribel Sánchez Gálvez
-- **Institución:** BUAP — Facultad de Ciencias Físico-Matemáticas
+- **Estudiante:** Angel Armando Carreno Gonzalez
+- **Investigadora:** Alba Maribel Sanchez Galvez
+- **Institucion:** BUAP - Facultad de Ciencias Fisico-Matematicas
 
 ---
 
-## Qué hace
+## Que hace
 
-| Función | Detalle |
+| Funcion | Detalle |
 |---|---|
-| Navegación | Avance recto con PID de rumbo sobre el giroscopio (MPU6050) |
-| Evasión | Al detectar obstáculo se detiene y hace un **barrido de 360°** (8 pasos de 45°), midiendo el frente en cada parada, y sale por el rumbo más despejado |
-| Detección de gas | MQ-2 con lectura **analógica (AO)** para concentración en ppm + **DO** digital como segunda alarma, con histéresis y latch |
-| Comunicación | Teletría a Supabase por HTTPS (TLS) y comandos desde la app |
+| Navegacion | Avance recto con PID de rumbo sobre el giroscopio (MPU6050) |
+| Evasion | Al detectar obstaculo se detiene y hace un **barrido de 360 grados** (8 pasos de 45), midiendo el frente en cada parada, y sale por el rumbo mas despejado |
+| Deteccion de gas | MQ-2 con lectura **analogica (AO)** para concentracion en ppm + **DO** digital como segunda alarma, con histeresis y latch |
+| Comunicacion | Telemetria a Supabase por HTTPS (TLS) y comandos desde la app |
 | App Android | React Native: mapa en vivo, sensores, alerta de gas con parpadeo |
 
 ## Hardware
@@ -33,13 +33,13 @@ obstáculos y reporta su estado en tiempo real a una app Android por WiFi
 | Ultrasónicos | 3 x HC-SR04 (frente / izquierda / derecha) |
 | Sensor de gas | MQ-2 (DO en GPIO23, AO en GPIO36) |
 | Bumpers | 3 x pulsadores (frente / izquierda / derecha) |
-| Batería | 2 x 18650 en serie (7.4 V) |
+| Bateria | 2 x 18650 en serie (7.4 V) |
 
 ### Conexiones
 
 ```
 MQ-2    VCC -> 5V      GND -> GND
-        DO   -> GPIO23  (con colector abierto: necesita pull-up)
+        DO   -> GPIO23  (colector abierto: necesita pull-up)
         AO   -> GPIO36  (ADC1_CH0; el ADC2 no funciona con WiFi)
 
 HC-SR04 frontal    TRIG -> GPIO5    ECHO -> GPIO18
@@ -61,11 +61,11 @@ firmware/RMA_3S_Mapa/     Sketch de Arduino (ESP32)
   RMA_3S_Mapa.ino         Firmware completo
   secrets.example.h       Plantilla de credenciales (copiar a secrets.h)
 app/                      App Android (React Native)
-  src/screens/            Dashboard y conexión
+  src/screens/            Dashboard y conexion
   src/components/         Medidor de gas y mapa
   src/hooks/              Datos en vivo (WiFi/Supabase + Bluetooth)
   android/                Proyecto Android nativo
-docs/                     Esquema SQL y notas
+docs/                     Esquema SQL
 ```
 
 ## Puesta en marcha
@@ -76,7 +76,7 @@ docs/                     Esquema SQL y notas
    ```bash
    cp firmware/RMA_3S_Mapa/secrets.example.h firmware/RMA_3S_Mapa/secrets.h
    ```
-   y rellena WiFi y Supabase. `secrets.h` está en `.gitignore`, nunca se sube.
+   y rellena WiFi y Supabase. `secrets.h` esta en `.gitignore`, nunca se sube.
 2. Compila con **Arduino CLI**:
    ```bash
    arduino-cli compile \
@@ -113,14 +113,14 @@ tablas `lecturas_robot` y `comandos_robot` y las publica en `supabase_realtime`.
 
 ## Comandos del robot
 
-Se envían por USB o por la tabla `comandos_robot` de Supabase.
+Se envian por USB o por la tabla `comandos_robot` de Supabase.
 
 | Comando | Efecto |
 |---|---|
 | `ini` / `start` | Arranca el movimiento (recalibra el giroscopio y fija el rumbo) |
 | `alto` / `stop` | Detiene el robot |
 | `ping` | Responde `ACK:PONG` |
-| `diag` | Diagnóstico completo |
+| `diag` | Diagnostico completo |
 | `net` | Prueba de red (DNS/TCP/HTTP/TLS) |
 | `heap` | Memoria libre del ESP32 |
 | `gascal` | Recalibra el MQ-2 en aire limpio (detiene el robot ~14 s) |
@@ -132,24 +132,24 @@ Se envían por USB o por la tabla `comandos_robot` de Supabase.
 
 ## Notas sobre el sensor de gas
 
-El **MQ-2 es un comparador, no un sensor de concentración**: su salida digital
+El **MQ-2 es un comparador, no un sensor de concentracion**: su salida digital
 DO solo cambia cuando se cruza el umbral que fija el trimpot. Por eso la alarma
-principal usa la salida **analógica AO**, que sí da concentración en ppm.
+principal usa la salida **analogica AO**, que si da concentracion en ppm.
 
-- La alarma tiene **histéresis** (300 ppm enciende / 200 ppm apaga) y **latch**:
+- La alarma tiene **histeresis** (300 ppm enciende / 200 ppm apaga) y **latch**:
   una vez que se enclava, el robot **no** se reanuda solo. Solo lo liberan
   `gasoff` o `gascal`.
 - El **DO es de colector abierto**: necesita pull-up. No lo quites del pin, o
   queda flotante y lee LOW siempre (falso positivo de gas).
-- El módulo necesita **3 minutos de calentamiento** antes de que el AO sea
+- El modulo necesita **3 minutos de calentamiento** antes de que el AO sea
   confiable. El DO responde a los ~20 s.
-- Detecta **GLP, propano, metano, humo y alcohol** — no CO₂. El GLP pesa más
+- Detecta **GLP, propano, metano, humo y alcohol** - no CO2. El GLP pesa mas
   que el aire: pon el sensor **bajo** y cerca de la fuente.
 - Para probar: **encendedor con gas, sin llama**, pegado al sensor.
 
-## Configuración del ESP32
+## Configuracion del ESP32
 
-El modo WiFi puro es el que se usa en producción (el Bluetooth se desactiva
+El modo WiFi puro es el que se usa en produccion (el Bluetooth se desactiva
 para liberar ~95 kB de RAM, que es lo que necesita el TLS):
 
 ```cpp
@@ -159,4 +159,4 @@ para liberar ~95 kB de RAM, que es lo que necesita el TLS):
 
 ## Licencia
 
-Proyecto académico. BUAP — Hacer Ciencia en la BUAP, Otoño 2026.
+Proyecto academico. BUAP - Hacer Ciencia en la BUAP, Otono 2026.
