@@ -72,7 +72,7 @@ const float AO_LIMPIO = 1.60f;  // V por debajo de los cuales se apaga
 
 const unsigned long T_TELEMETRIA = 2000;
 const unsigned long T_COMANDOS   = 2000;
-const unsigned long T_HTTP       = 1200;
+const unsigned long T_HTTP       = 3000;   // el primer TLS puede tardar
 
 // Giro por tiempo si el giroscopio no responde (ms por grado)
 const float MS_POR_GRADO = 13.0f;
@@ -422,9 +422,8 @@ void actualizarLED() {
 void iniciar() {
   parar();
   delay(120);
+  calibrarBias();        // bias fresco antes de medir la polaridad
   calibrarMotores();
-  delay(200);
-  calibrarBias();
   theta = 0.0f;
   rumboRecto = 0.0f;
   gatillo = DIST_OBSTACULO;
@@ -515,7 +514,7 @@ void enviarTelemetria() {
   HTTPClient http;
   http.setReuse(true);
   http.setTimeout(T_HTTP);
-  if (!http.begin(tls, SUPABASE_URL)) { http.end(); return; }
+  if (!http.begin(tls, SUPABASE_URL)) { http.end(); tTelemetria = millis(); return; }
   agregarCabeceras(http);
 
   String body = "{";
@@ -547,7 +546,7 @@ void revisarComandos() {
   HTTPClient http;
   http.setReuse(true);
   http.setTimeout(T_HTTP);
-  if (!http.begin(tls, SUPABASE_CMD_URL)) { http.end(); return; }
+  if (!http.begin(tls, SUPABASE_CMD_URL)) { http.end(); tComandos = millis(); return; }
   http.addHeader("apikey", SUPABASE_KEY);
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_KEY);
 
@@ -612,7 +611,7 @@ void tareaNube() {
     return;
   }
 
-  bool despejado = !moviendo || dFrente > 100.0f;
+  bool despejado = !moviendo || dFrente > 150.0f;
   bool forzarTel = (millis() - tTelemetria > 8000UL);
   bool forzarCmd = (millis() - tComandos > 5000UL);
 
