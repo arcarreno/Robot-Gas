@@ -277,8 +277,14 @@ float medirLado(int trig, int echo) {
 }
 
 void leerGas() {
-  int nivelDO = digitalRead(MQ2_DO);
+  static unsigned long tMuestra = 0;
+  static uint8_t altoSeg = 0, bajoSeg = 0;
 
+  unsigned long ahora = millis();
+  if (ahora - tMuestra < 100) return;   // 10 muestras por segundo
+  tMuestra = ahora;
+
+  int nivelDO = digitalRead(MQ2_DO);
   int adc = analogRead(MQ2_AO);
   float v = adc * (3.3f / 4095.0f);
 
@@ -287,10 +293,20 @@ void leerGas() {
   if (ppm < 0.0f) ppm = 0.0f;
   if (ppm > 9999.0f) ppm = 9999.0f;
 
-  bool detecta = (v >= AO_ALARMA) || (doUtil && nivelDO == LOW);
-  if (detecta) {
+  // Este modulo entrega el DO en HIGH con gas y en LOW con aire limpio.
+  // Si el pin estuviera al aire, el pull-up lo dejaria siempre en HIGH: por
+  // eso el DO solo se usa despues de haberlo visto en LOW (esta conectado).
+  if (nivelDO == LOW) doUtil = true;
+
+  if (nivelDO == HIGH) { if (altoSeg < 5)  altoSeg++; bajoSeg = 0; }
+  else                 { if (bajoSeg < 10) bajoSeg++; altoSeg = 0; }
+
+  bool doGas    = doUtil && altoSeg >= 5;          // 500 ms seguidos en HIGH
+  bool doLimpio = (altoSeg == 0 && bajoSeg >= 10); // 1 s seguido en LOW
+
+  if (doGas || v >= AO_ALARMA) {
     gas = true;
-  } else if (v <= AO_LIMPIO && (nivelDO == HIGH || !doUtil)) {
+  } else if (doLimpio && v <= AO_LIMPIO) {
     gas = false;
   }
 }
@@ -663,14 +679,13 @@ void setup() {
   if (calibrarBias()) Serial.println("IMU OK");
   else Serial.println("IMU: no responde");
 
-  // El DO del MQ-2 es de colector abierto. Si en aire limpio esta en LOW
-  // (trimpot mal ajustado o pin flotante) no sirve como alarma: se ignora
-  // y queda el AO. Asi el robot no se queda parado por un falso positivo.
+  // El DO de este modulo va en LOW con aire limpio y en HIGH con gas.
+  // doUtil se habilita en cuanto el pin se ve en LOW: asi un DO al aire
+  // (que el pull-up mantendria en HIGH) nunca dispara una falsa alarma.
   delay(100);
-  doUtil = (digitalRead(MQ2_DO) == HIGH);
-  Serial.printf("MQ2: DO inicial=%s -> %s\n",
-                digitalRead(MQ2_DO) == HIGH ? "HIGH" : "LOW",
-                doUtil ? "usable" : "ignorado (solo AO)");
+  doUtil = false;
+  Serial.printf("MQ2: DO inicial=%s (se habilita al verlo en LOW)\n",
+                digitalRead(MQ2_DO) == HIGH ? "HIGH" : "LOW");
 
   conectarWiFi();
   descartarComandosViejos();

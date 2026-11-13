@@ -128,17 +128,19 @@ Se envian por USB o por la tabla `comandos_robot` de Supabase.
 ## Notas sobre el sensor de gas
 
 El firmware **no calibra** el MQ-2: lo lee desde el primer segundo y manda
-`gas_ppm` y `gas_do` en cada lectura. La alarma se enciende cuando el AO supera
-**2.4 V** o cuando el DO se cierra (si el DO es utilizable) y se apaga por
-debajo de **1.6 V**.
+`gas_ppm` y `gas_do` en cada lectura.
 
+- En el modulo instalado el **DO va en LOW con aire limpio** y pasa a **HIGH
+  con gas**. La alarma se enciende cuando el DO se mantiene **500 ms en HIGH**
+  y se apaga tras **1 s en LOW** (antirrebote).
 - El **DO es de colector abierto**: necesita pull-up. El firmware lo activa.
-- Si al arrancar el DO ya esta en LOW (trimpot mal ajustado o pin flotante),
-  el firmware lo **ignora** para no dejar el robot parado por un falso positivo:
-  en ese caso solo cuenta el AO. Ajusta el trimpot hasta que el LED del modulo
-  este apagado en aire limpio.
+- El **AO puede quedar en 0 V** si el modulo es de 3 pines o el AO no esta
+  conectado; en ese caso el DO es la unica alarma y `gas_ppm` queda en 0.
+- El DO se habilita la primera vez que se ve en LOW, para no confundir un pin
+  al aire con gas. **Arranca el robot en aire limpio** una vez; despues la
+  alarma queda activa.
 - `gas_ppm` es una **estimacion lineal** para la barra de la app, no una medida
-  de laboratorio.
+  de laboratorio (con el AO desconectado se queda en 0).
 - Detecta **GLP, propano, metano, humo y alcohol** - no CO2. El GLP pesa mas
   que el aire: pon el sensor **bajo** y cerca de la fuente.
 - Para probar: **encendedor con gas, sin llama**, pegado al sensor.
