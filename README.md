@@ -16,9 +16,9 @@ obstaculos y reporta su estado en tiempo real a una app Android por WiFi
 
 | Funcion | Detalle |
 |---|---|
-| Navegacion | Avance recto con PID de rumbo sobre el giroscopio (MPU6050) |
+| Navegacion | Avance recto con correccion de rumbo por giroscopio (MPU6050) |
 | Evasion | Al detectar obstaculo se detiene y hace un **barrido de 360 grados** (8 pasos de 45), midiendo el frente en cada parada, y sale por el rumbo mas despejado |
-| Deteccion de gas | MQ-2 con lectura **analogica (AO)** para concentracion en ppm + **DO** digital como segunda alarma, con histeresis y latch |
+| Deteccion de gas | MQ-2 leido desde el arranque: **AO** (GPIO36) y **DO** (GPIO23). Si hay gas el robot se detiene y la app parpadea |
 | Comunicacion | Telemetria a Supabase por HTTPS (TLS) y comandos desde la app |
 | App Android | React Native: mapa en vivo, sensores, alerta de gas con parpadeo |
 
@@ -117,45 +117,36 @@ Se envian por USB o por la tabla `comandos_robot` de Supabase.
 
 | Comando | Efecto |
 |---|---|
-| `ini` / `start` | Arranca el movimiento (recalibra el giroscopio y fija el rumbo) |
+| `ini` / `start` | Arranca. La primera vez calibra solo la polaridad de los motores (~2 s, robot en el piso) |
 | `alto` / `stop` | Detiene el robot |
 | `ping` | Responde `ACK:PONG` |
-| `diag` | Diagnostico completo |
-| `net` | Prueba de red (DNS/TCP/HTTP/TLS) |
-| `heap` | Memoria libre del ESP32 |
-| `gascal` | Recalibra el MQ-2 en aire limpio (detiene el robot ~14 s) |
-| `gasinv` | Invierte la polaridad del DO y libera el latch |
-| `gasoff` | Desactiva el corte por gas y libera el latch |
+| `cal` | Vuelve a calibrar los motores (si se invirtio una rueda) |
+| `gasoff` | Desactiva el corte por gas (la app sigue mostrando la alerta) |
 | `gason` | Reactiva el corte por gas |
-| `mq2` | Estado del sensor: DO, voltaje del AO, ppm, R0 |
-| `mq2test` | 8 lecturas DO+AO en 4 s (para probar con el encendedor) |
+| `mq2` | Estado del sensor: AO en voltios, ppm estimadas, DO y si el DO es usable |
 
 ## Notas sobre el sensor de gas
 
-El **MQ-2 es un comparador, no un sensor de concentracion**: su salida digital
-DO solo cambia cuando se cruza el umbral que fija el trimpot. Por eso la alarma
-principal usa la salida **analogica AO**, que si da concentracion en ppm.
+El firmware **no calibra** el MQ-2: lo lee desde el primer segundo y manda
+`gas_ppm` y `gas_do` en cada lectura. La alarma se enciende cuando el AO supera
+**2.4 V** o cuando el DO se cierra (si el DO es utilizable) y se apaga por
+debajo de **1.6 V**.
 
-- La alarma tiene **histeresis** (300 ppm enciende / 200 ppm apaga) y **latch**:
-  una vez que se enclava, el robot **no** se reanuda solo. Solo lo liberan
-  `gasoff` o `gascal`.
-- El **DO es de colector abierto**: necesita pull-up. No lo quites del pin, o
-  queda flotante y lee LOW siempre (falso positivo de gas).
-- El modulo necesita **3 minutos de calentamiento** antes de que el AO sea
-  confiable. El DO responde a los ~20 s.
+- El **DO es de colector abierto**: necesita pull-up. El firmware lo activa.
+- Si al arrancar el DO ya esta en LOW (trimpot mal ajustado o pin flotante),
+  el firmware lo **ignora** para no dejar el robot parado por un falso positivo:
+  en ese caso solo cuenta el AO. Ajusta el trimpot hasta que el LED del modulo
+  este apagado en aire limpio.
+- `gas_ppm` es una **estimacion lineal** para la barra de la app, no una medida
+  de laboratorio.
 - Detecta **GLP, propano, metano, humo y alcohol** - no CO2. El GLP pesa mas
   que el aire: pon el sensor **bajo** y cerca de la fuente.
 - Para probar: **encendedor con gas, sin llama**, pegado al sensor.
 
 ## Configuracion del ESP32
 
-El modo WiFi puro es el que se usa en produccion (el Bluetooth se desactiva
-para liberar ~95 kB de RAM, que es lo que necesita el TLS):
-
-```cpp
-#define USAR_WIFI 1
-#define USAR_BLUETOOTH 0
-```
+El firmware es solo WiFi (sin Bluetooth): asi libera ~95 kB de RAM para el TLS.
+Las redes WiFi se declaran en `secrets.h`, en orden de preferencia.
 
 ## Licencia
 
