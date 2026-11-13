@@ -320,7 +320,13 @@ void girarGrados(float grados) {
     if (grados > 0.0f) motores(-VEL_GIRO, VEL_GIRO);
     else               motores(VEL_GIRO, -VEL_GIRO);
     unsigned long t0 = millis();
-    while (millis() - t0 < ms) { leerGas(); if (gas && gasCorte) break; delay(5); }
+    while (millis() - t0 < ms) {
+      atenderSerial();
+      if (!moviendo) break;
+      leerGas();
+      if (gas && gasCorte) break;
+      delay(5);
+    }
     parar();
     delay(120);
     tOdo = millis();                 // el giro ya se conto aqui: no re-integrar
@@ -349,6 +355,8 @@ void girarGrados(float grados) {
 
     leerGas();
     if (gas && gasCorte) break;
+    atenderSerial();
+    if (!moviendo) break;
     delay(8);
   }
   parar();
@@ -367,6 +375,7 @@ void esquivar() {
 
   for (int i = 1; i <= 8; i++) {
     girarGrados(45.0f);
+    if (!moviendo) return;
     if (gas && gasCorte) return;
     delay(100);
     float d = medirFrente();
