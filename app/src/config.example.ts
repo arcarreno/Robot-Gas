@@ -7,6 +7,3 @@ export const SUPABASE_ANON_KEY = 'sb_publishable_TU_CLAVE';
 
 // Identificador del robot en la base de datos
 export const ROBOT_ID = 'robot1';
-
-// Nombre Bluetooth del ESP32 (BluetoothSerial.begin("RobotBT"))
-export const BLUETOOTH_NAME = 'RobotBT';

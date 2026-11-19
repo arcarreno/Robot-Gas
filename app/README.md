@@ -1,41 +1,30 @@
-# RobotApp — Monitoreo del robot VIEP
+# RMADG1 — Monitoreo del robot autónomo
 
 App Android en React Native + TypeScript para visualizar en tiempo real:
 
-- Posición y orientación del robot (mapa con trayectoria y obstáculos).
+- Mapa de la ruta: trayectoria en azul, robot en verde y **puntos rojos solo
+  donde se detectó gas** (los obstáculos ya no se pintan).
 - Sensores ultrasónicos (frente, izquierda, derecha).
-- Sensor de gas MQ-2 (alerta y estado).
-- Comandos `ini` / `alto`.
+- Estado del sensor MQ-2, con alerta y parpadeo de pantalla cuando hay gas.
+- Comandos `ini` / `alto` y limpieza del mapa.
 
-Dos modos de conexión:
-
-1. **Wi-Fi (Supabase Realtime):** el ESP32 sube las lecturas a Supabase y la app
-   se suscribe a la tabla `lecturas_robot`.
-2. **Bluetooth directo:** la app se conecta al `RobotBT` del ESP32 y lee el JSON
-   línea por línea (igual que hacía `mapa_bot3_csv.py`).
+**Un único enlace: Wi-Fi con Supabase Realtime.** El ESP32 publica en
+`lecturas_robot` y la app se suscribe a los `INSERT` de esa tabla.
 
 ---
 
 ## 1. Configurar credenciales
 
-Edita `src/config.ts`:
+Copia `src/config.example.ts` como `src/config.ts` y edita:
 
 ```ts
 export const SUPABASE_URL = 'https://TU_PROYECTO.supabase.co';
-export const SUPABASE_ANON_KEY = 'TU_ANON_KEY';
+export const SUPABASE_ANON_KEY = 'TU_CLAVE_PUBLISHABLE';
 export const ROBOT_ID = 'robot1';
-export const BLUETOOTH_NAME = 'RobotBT';
 ```
 
-En el firmware `RMA_3S_Mapa.ino` reemplaza también:
-
-```cpp
-const char* WIFI_SSID = "TU_SSID";
-const char* WIFI_PASS = "TU_PASS";
-const char* SUPABASE_URL = "https://TU_PROYECTO.supabase.co/rest/v1/lecturas_robot";
-const char* SUPABASE_CMD_URL = "https://TU_PROYECTO.supabase.co/rest/v1/comandos_robot?...";
-const char* SUPABASE_KEY = "TU_ANON_KEY";
-```
+`config.ts` queda fuera del repositorio. En el firmware `RMA_3S_Mapa.ino` los
+datos equivalentes van en `secrets.h` (también fuera del repo).
 
 ---
 
@@ -52,9 +41,12 @@ create table if not exists lecturas_robot (
   theta_rad float,
   gas_valor integer,
   gas_alerta boolean default false,
+  gas_ppm float,
   front_cm float,
   left_cm float,
   right_cm float,
+  reset_reason integer,
+  uptime_ms bigint,
   robot_id text default 'robot1'
 );
 
@@ -76,7 +68,6 @@ create policy "comandos insert" on comandos_robot for insert with check (true);
 create policy "comandos update" on comandos_robot for update using (true);
 
 alter publication supabase_realtime add table lecturas_robot;
-alter publication supabase_realtime add table comandos_robot;
 ```
 
 ---
@@ -88,11 +79,15 @@ npm install
 npx react-native run-android
 ```
 
-Requisitos: Android Studio, SDK de Android, un emulador o dispositivo con
-depuración USB activada.
+Requisitos: Android Studio, SDK de Android y un dispositivo o emulador.
 
-> `react-native-bluetooth-classic` es un módulo nativo: **no funciona en Expo Go**.
-> Debe compilarse con `run-android`.
+Para generar el APK:
+
+```bash
+cd android && ./gradlew assembleRelease
+```
+
+El archivo sale como `RMADG1-v1.0-release.apk`.
 
 ---
 
@@ -100,26 +95,24 @@ depuración USB activada.
 
 ```
 src/
-├── config.ts                 Credenciales y constantes
+├── theme.ts                  Colores, espaciado y tipografía
+├── config.ts                 Credenciales (fuera del repo)
 ├── types/robot.ts            Tipos compartidos
-├── lib/supabase.ts           Cliente Supabase
-├── services/bluetooth.ts     Conexión SPP clásica
-├── hooks/useRobotData.ts     Estado + Supabase Realtime + Bluetooth
-├── components/MapCanvas.tsx  Mapa SVG con zoom/arrastre
+├── lib/supabase.ts           Cliente Supabase (HTTP + Realtime)
+├── hooks/useRobotData.ts     Estado, telemetría y puntos de gas
+├── components/MapCanvas.tsx  Mapa SVG con zoom/arrastre y leyenda
 ├── components/GasGauge.tsx   Indicador de gas
-└── screens/
-    ├── ConnectScreen.tsx     Selección Wi-Fi / Bluetooth
-    └── DashboardScreen.tsx   Monitoreo y comandos
+└── screens/DashboardScreen.tsx  Panel único: mapa, sensores y controles
 ```
 
 ---
 
 ## 5. Notas
 
-- El MQ-2 está en **GPIO 23** en modo digital (`DO`). El firmware envía
-  `gas_valor` (0/1) y `gas_alerta`.
-- Si el módulo se alimenta a 5 V, usa un divisor de tensión en `DO` antes de
-  entrar al GPIO 23 (el ESP32 tolera 3.3 V).
-- En modo Wi-Fi, los comandos se insertan en `comandos_robot` y el ESP32 los
-  recoge cada 2 segundos.
-- En modo Bluetooth, los comandos se escriben directo al `RobotBT`.
+- El rojo está reservado para el gas. El botón de parada es oscuro y el estado
+  "sin enlace" es ámbar, para que el color rojo siempre signifique gas.
+- El punto rojo se agrega una vez por evento de gas (flanco de subida), no una
+  vez por lectura.
+- El MQ-2 conectado entrega el `DO` en HIGH con gas y en LOW con aire limpio.
+  El `AO` no está conectado, así que `gas_ppm` se reporta en 0.
+- Los comandos se insertan en `comandos_robot` y el ESP32 los recoge cada 2 s.

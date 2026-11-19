@@ -1,81 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { PermissionsAndroid, Platform } from 'react-native';
-import type { BluetoothDevice } from 'react-native-bluetooth-classic';
 import { supabase } from '../lib/supabase';
 import { LecturaDB, Punto, RobotData } from '../types/robot';
-import {
-  conectarDispositivo,
-  dispositivosEmparejados,
-  liberarDispositivo,
-  suscribirDesconexion,
-} from '../services/bluetooth';
-
-export type ModoConexion = 'wifi' | 'bluetooth';
 
 const MAX_TRAYECTORIA = 1500;
-const MAX_OBSTACULOS = 900;
+const MAX_PUNTOS_GAS = 200;
 const MS_SIN_DATOS = 15000;
 
 /**
- * Android 12+ exige BLUETOOTH_CONNECT en el momento exacto de abrir el socket.
- * Si el permiso no está concedido, la librería nativa lanza SecurityException
- * en un hilo y el proceso muere sin pasar por el catch de JavaScript.
- * Por eso se verifica aquí y se corta con un mensaje claro.
+ * Unico enlace de la app: Supabase Realtime (WiFi).
+ * El ESP32 publica en lecturas_robot y la app recibe cada INSERT.
  */
-async function asegurarPermisoConexion(): Promise<void> {
-  if (Platform.OS !== 'android') return;
-
-  if (Number(Platform.Version) >= 31) {
-    const connect = await PermissionsAndroid.check(
-      PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-    );
-    if (connect) return;
-
-    const result = await PermissionsAndroid.request(
-      PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-      {
-        title: 'Permiso de Bluetooth',
-        message:
-          'RobotCarr necesita "Dispositivos cercanos" para conectarse al robot por Bluetooth clásico.',
-        buttonPositive: 'Permitir',
-        buttonNegative: 'Cancelar',
-      },
-    );
-    if (result !== PermissionsAndroid.RESULTS.GRANTED) {
-      throw new Error(
-        'Falta el permiso "Dispositivos cercanos". Actívalo en Ajustes > Apps > RobotCarr > Permisos.',
-      );
-    }
-  } else {
-    const fine = await PermissionsAndroid.check(
-      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-    );
-    if (!fine) {
-      const result = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-      );
-      if (result !== PermissionsAndroid.RESULTS.GRANTED) {
-        throw new Error(
-          'Falta el permiso de ubicación, necesario para Bluetooth en Android 11 o menor.',
-        );
-      }
-    }
-  }
-}
-
-export function useRobotData(modo: ModoConexion) {
+export function useRobotData() {
   const [data, setData] = useState<RobotData | null>(null);
   const [trajectory, setTrajectory] = useState<Punto[]>([]);
-  const [obstacles, setObstacles] = useState<Punto[]>([]);
+  const [gasPoints, setGasPoints] = useState<Punto[]>([]);
   const [conectado, setConectado] = useState(false);
   const [sinDatos, setSinDatos] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [log, setLog] = useState<string[]>([]);
   const [resetContador, setResetContador] = useState(0);
+  const [intento, setIntento] = useState(0);
 
-  const btRef = useRef<BluetoothDevice | null>(null);
-  const btSubRef = useRef<{ remove: () => void } | null>(null);
   const ultimoDatoRef = useRef(0);
+  const gasActivoRef = useRef(false);
 
   const aplicar = useCallback((robot: RobotData) => {
     ultimoDatoRef.current = Date.now();
@@ -87,26 +33,23 @@ export function useRobotData(modo: ModoConexion) {
         ? [...prev.slice(prev.length - MAX_TRAYECTORIA + 1), p]
         : [...prev, p],
     );
-
-    const { x, y, theta } = robot.pose;
-    const puntos = [
-      { d: robot.sensors.front, a: 0 },
-      { d: robot.sensors.left, a: -Math.PI / 2 },
-      { d: robot.sensors.right, a: Math.PI / 2 },
-    ].map(({ d, a }) => ({
-      x: x + d * Math.cos(theta + a),
-      y: y + d * Math.sin(theta + a),
-    }));
-
-    setObstacles(prev =>
-      prev.length >= MAX_OBSTACULOS
-        ? [...prev.slice(prev.length - MAX_OBSTACULOS + 3), ...puntos]
-        : [...prev, ...puntos],
-    );
   }, []);
 
   const aplicarDB = useCallback(
     (l: LecturaDB) => {
+      const alerta = !!l.gas_alerta;
+
+      // Un punto rojo por evento de gas (flanco de subida), no uno por lectura.
+      if (alerta && !gasActivoRef.current) {
+        const p = { x: l.x_cm, y: l.y_cm };
+        setGasPoints(prev =>
+          prev.length >= MAX_PUNTOS_GAS
+            ? [...prev.slice(prev.length - MAX_PUNTOS_GAS + 1), p]
+            : [...prev, p],
+        );
+      }
+      gasActivoRef.current = alerta;
+
       aplicar({
         pose: { x: l.x_cm, y: l.y_cm, theta: l.theta_rad },
         sensors: {
@@ -114,7 +57,7 @@ export function useRobotData(modo: ModoConexion) {
           left: l.left_cm,
           right: l.right_cm,
           gas: l.gas_valor,
-          gasAlerta: l.gas_alerta,
+          gasAlerta: alerta,
           gasPpm: l.gas_ppm ?? -1,
         },
         timestamp: new Date(l.timestamp).getTime(),
@@ -123,7 +66,7 @@ export function useRobotData(modo: ModoConexion) {
     [aplicar],
   );
 
-  // Aviso: hay enlace pero el robot no está enviando nada
+  // Aviso de "sin telemetria" aunque el canal siga conectado.
   useEffect(() => {
     if (!conectado) {
       setSinDatos(true);
@@ -135,27 +78,24 @@ export function useRobotData(modo: ModoConexion) {
     return () => clearInterval(t);
   }, [conectado]);
 
-  // ---------- Modo WiFi: Supabase Realtime ----------
   useEffect(() => {
-    if (modo !== 'wifi') {
-      return;
-    }
-
     setError(null);
+    setConectado(false);
 
-    // Carga inmediata de la última lectura: no esperar al siguiente INSERT.
+    // Carga inmediata de la ultima lectura (no esperar al siguiente INSERT).
     supabase
       .from('lecturas_robot')
       .select('*')
       .order('timestamp', { ascending: false })
       .limit(1)
       .maybeSingle()
-      .then(({ data: ultima }) => {
+      .then(({ data: ultima, error: err }) => {
         if (ultima) aplicarDB(ultima as LecturaDB);
+        if (err) setError(err.message);
       });
 
     const channel = supabase
-      .channel('lecturas-robot')
+      .channel(`rmadg1-${intento}`)
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'lecturas_robot' },
@@ -168,7 +108,7 @@ export function useRobotData(modo: ModoConexion) {
         }
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           setConectado(false);
-          setError('No se pudo conectar a Supabase Realtime');
+          setError('No se pudo conectar con Supabase Realtime.');
         }
       });
 
@@ -176,101 +116,25 @@ export function useRobotData(modo: ModoConexion) {
       supabase.removeChannel(channel);
       setConectado(false);
     };
-  }, [modo, aplicarDB]);
+  }, [intento, aplicarDB]);
 
-  // ---------- Modo Bluetooth: SPP directo ----------
-  const conectarBluetooth = useCallback(
-    async (address: string) => {
-      setError(null);
-      setLog([]);
-      ultimoDatoRef.current = 0;
-      try {
-        await asegurarPermisoConexion();
-        const devices = await dispositivosEmparejados();
-        const device = devices.find(d => d.address === address);
-        if (!device) {
-          throw new Error('Dispositivo no encontrado. Empareja el robot primero.');
-        }
-
-        const conn = await conectarDispositivo(device, line => {
-          let esTelemetria = false;
-          try {
-            const j = JSON.parse(line);
-            if (j.pose && j.sensors) {
-              esTelemetria = true;
-              aplicar({
-                pose: {
-                  x: Number(j.pose.x) * 100, // firmware envía metros -> cm
-                  y: Number(j.pose.y) * 100,
-                  theta: Number(j.pose.theta),
-                },
-                sensors: {
-                  front: Number(j.sensors.front ?? 0),
-                  left: Number(j.sensors.left ?? 0),
-                  right: Number(j.sensors.right ?? 0),
-                  gas: Number(j.sensors.gas ?? 0),
-                  gasAlerta: Boolean(j.sensors.gas_alerta),
-                  gasPpm: Number(j.sensors.gas_ppm ?? -1),
-                },
-                timestamp: Date.now(),
-              });
-            }
-          } catch {
-            // no es JSON
-          }
-          if (!esTelemetria) {
-            // ACK/errores/colisiones: se muestran en pantalla (sin adb)
-            console.log('[BT RX]', line);
-            setLog(prev => [...prev.slice(-9), line]);
-          }
-        });
-
-        btSubRef.current = suscribirDesconexion(() => {
-          setConectado(false);
-          setLog(prev => [...prev.slice(-9), 'BT: desconectado']);
-        });
-        btRef.current = conn;
-        setConectado(true);
-      } catch (e: any) {
-        setError(e?.message ?? 'Error al conectar por Bluetooth');
-        setConectado(false);
-        setLog(prev => [...prev.slice(-9), `ERROR: ${e?.message ?? e}`]);
-      }
-    },
-    [aplicar],
-  );
-
-  const desconectarBluetooth = useCallback(async () => {
-    btSubRef.current?.remove();
-    btSubRef.current = null;
-    liberarDispositivo(btRef.current);
-    try {
-      await btRef.current?.disconnect();
-    } catch {
-      // ignorar
-    }
-    btRef.current = null;
-    setConectado(false);
-  }, []);
+  const reconectar = useCallback(() => setIntento(n => n + 1), []);
 
   const reiniciarMapa = useCallback(() => {
     setTrajectory([]);
-    setObstacles([]);
-    setResetContador(n => n + 1);   // el mapa también recupera zoom y paneo
+    setGasPoints([]);
+    setResetContador(n => n + 1);
   }, []);
 
   return {
     data,
     trajectory,
-    obstacles,
+    gasPoints,
     conectado,
     sinDatos,
     error,
-    log,
     resetContador,
-    btRef,
-    conectarBluetooth,
-    desconectarBluetooth,
+    reconectar,
     reiniciarMapa,
   };
 }

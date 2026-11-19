@@ -1,5 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { colors, radius, space } from '../theme';
 
 type Props = {
   valor: number;
@@ -7,91 +8,75 @@ type Props = {
   ppm?: number;
 };
 
-// Umbrales del firmware (MQ2_PPM_ALARMA / MQ2_PPM_LIMPIO)
-const PPM_ALARMA = 300;
-const PPM_LIMPIO = 200;
-
 export function GasGauge({ valor, alerta, ppm }: Props) {
-  const tienePpm = typeof ppm === 'number' && ppm >= 0;
-
-  // Barra de 0 a 500 ppm (el tope útil está alrededor de 500).
-  const pct = tienePpm ? Math.min(100, Math.max(0, (ppm / 500) * 100)) : 0;
-  const colorBarra = alerta ? '#B91C1C' : pct > 60 ? '#D97706' : '#16A34A';
+  // El modulo instalado entrega el DO digital y no entrega concentration
+  // analogica util: 0 ppm no significa "sin sensor", significa "sin AO".
+  const hayPpm = typeof ppm === 'number' && ppm > 0;
 
   return (
-    <View style={[styles.box, alerta ? styles.boxAlerta : styles.boxOk]}>
-      <View style={styles.row}>
-        <Text style={[styles.estado, alerta ? styles.textoAlerta : styles.textoOk]}>
-          {alerta ? '⚠ GAS DETECTADO' : 'Aire limpio'}
+    <View
+      style={[styles.card, alerta ? styles.cardAlerta : styles.cardOk]}
+      accessibilityRole="text"
+      accessibilityLiveRegion="polite"
+    >
+      <View style={[styles.icono, alerta ? styles.iconoAlerta : styles.iconoOk]}>
+        <Text style={styles.iconoTexto}>{alerta ? '⚠' : '✓'}</Text>
+      </View>
+
+      <View style={styles.info}>
+        <Text style={[styles.titulo, alerta ? styles.textoAlerta : styles.textoOk]}>
+          {alerta ? 'GAS DETECTADO' : 'AIRE LIMPIO'}
         </Text>
-        <Text style={styles.valor}>
-          {tienePpm ? `${Math.round(ppm)} ppm` : `DO: ${valor}`}
+        <Text style={styles.detalle}>
+          {alerta
+            ? 'El robot se detuvo por seguridad. Ventila la zona antes de reiniciarlo.'
+            : 'Sensor MQ-2 activo. Sin gas detectado.'}
         </Text>
       </View>
 
-      {tienePpm && (
-        <>
-          <View style={styles.pista}>
-            <View
-              style={[styles.relleno, { width: `${pct}%`, backgroundColor: colorBarra }]}
-            />
-          </View>
-          <View style={styles.escala}>
-            <Text style={styles.marca}>0</Text>
-            <Text style={styles.marca}>alarma {PPM_ALARMA}</Text>
-            <Text style={styles.marca}>500</Text>
-          </View>
-          <Text style={styles.detalle}>
-            {alerta
-              ? `Concentración alta (${Math.round(ppm)} ppm). El robot se detuvo y queda enclavado hasta 'gascal' o 'gasoff'.`
-              : ppm >= PPM_LIMPIO
-                ? `Concentración en ${Math.round(ppm)} ppm, cerca del umbral de alarma (${PPM_ALARMA} ppm).`
-                : `Concentración ${Math.round(ppm)} ppm. Umbral de alarma ${PPM_ALARMA} ppm, se limpia por debajo de ${PPM_LIMPIO} ppm.`}
-          </Text>
-        </>
-      )}
-
-      {!tienePpm && (
-        <Text style={styles.detalle}>
-          {alerta
-            ? 'El robot se detuvo automáticamente por seguridad.'
-            : 'Sin lectura de concentración todavía (MQ-2 calibrándose).'}
-        </Text>
-      )}
+      <View style={styles.medida}>
+        <Text style={styles.numero}>{hayPpm ? Math.round(ppm as number) : valor}</Text>
+        <Text style={styles.unidad}>{hayPpm ? 'ppm' : 'DO'}</Text>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  box: {
-    borderRadius: 12,
-    padding: 12,
-    marginVertical: 8,
-  },
-  boxOk: { backgroundColor: '#E0F2FE' },
-  boxAlerta: { backgroundColor: '#FEE2E2' },
-  row: {
+  card: {
+    width: '100%',
+    maxWidth: 760,
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    gap: space.md,
+    padding: space.lg,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    marginBottom: space.md,
   },
-  estado: { fontWeight: '700', fontSize: 15 },
-  textoOk: { color: '#0369A1' },
-  textoAlerta: { color: '#B91C1C' },
-  valor: { color: '#334155', fontWeight: '600' },
-  pista: {
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#CBD5E1',
-    marginTop: 8,
-    overflow: 'hidden',
+  cardOk: { backgroundColor: colors.successSoft, borderColor: '#BBF7D0' },
+  cardAlerta: { backgroundColor: colors.dangerSoft, borderColor: '#FECACA' },
+  icono: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  relleno: { height: 8, borderRadius: 4 },
-  escala: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 2,
+  iconoOk: { backgroundColor: colors.success },
+  iconoAlerta: { backgroundColor: colors.danger },
+  iconoTexto: { color: '#FFFFFF', fontSize: 22, fontWeight: '800' },
+  info: { flex: 1 },
+  titulo: { fontSize: 16, fontWeight: '800', letterSpacing: 0.3 },
+  textoOk: { color: colors.success },
+  textoAlerta: { color: colors.danger },
+  detalle: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    marginTop: 4,
+    lineHeight: 17,
   },
-  marca: { color: '#64748B', fontSize: 10 },
-  detalle: { color: '#475569', marginTop: 4, fontSize: 12 },
+  medida: { alignItems: 'flex-end' },
+  numero: { fontSize: 24, fontWeight: '800', color: colors.text },
+  unidad: { fontSize: 11, color: colors.textMuted, fontWeight: '700' },
 });
