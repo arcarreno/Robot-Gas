@@ -204,21 +204,58 @@ void girar(int grados) {
   while (theta < -PI) theta += 2 * PI;
 }
 
+/* Gira hacia un lado SOLO hasta que el frente se despeja. No gira 90 fijos:
+   si el hueco esta a 30 grados termina en 30, si no, sigue hasta 180.
+   Es lo que hace el Maze-Solver de Moreshwar-R con 3 HC-SR04. */
+void girarHastaDespejar(int sentido) {
+  unsigned long t0 = millis(), tp = t0;
+  float acum = 0.0f;
+
+  if (sentido > 0) motores(-VEL_GIRO, VEL_GIRO);
+  else            motores( VEL_GIRO, -VEL_GIRO);
+
+  while (millis() - t0 < 3500UL) {
+    if (leerGyroZ()) {
+      unsigned long ahora = millis();
+      acum += (gyroZ - gyroBias) * (ahora - tp) / 1000.0f;
+      tp = ahora;
+    }
+    // No se concede terminar antes de 12 grados para no creer un eco
+    // todavia pendiente del giro anterior.
+    if (fabs(acum) > 12.0f * DEG_TO_RAD &&
+        medirFrente() > DIST_OBSTACULO * 1.8f) break;
+    atenderSerial();
+    leerGas();
+    if ((gas && gasCorte) || !moviendo) break;
+    delay(8);
+  }
+  parar();
+  delay(40);
+  tGyro = millis();
+  theta += acum;
+  while (theta >  PI) theta -= 2 * PI;
+  while (theta < -PI) theta += 2 * PI;
+}
+
 /* Evasion rapida: el frente esta tapado, se elige el LADO MAS DESPEJADO
    con los sensores izquierdo y derecho que ya estan montados. Solo si los
    dos lados estan tapados se hace el barrido completo de 8 pasos. */
 void esquivar() {
   parar();
 
+  // Un eco espurio no debe provocar un giro: se vuelve a medir antes.
+  delay(60);
+  if (medirFrente() > DIST_OBSTACULO) return;
+
   float li = (dIzq > 0.0f) ? dIzq : DIST_LIBRE;
   float de = (dDer > 0.0f) ? dDer : DIST_LIBRE;
 
   if (li > 70.0f || de > 70.0f) {
-    if (li > de + 10.0f)      girar(90);
-    else if (de > li + 10.0f) girar(-90);
-    else if (li > 70.0f)      girar(90);
-    else                      girar(-90);
-    Serial.printf("Giro lateral: izq %.0f der %.0f\n", li, de);
+    if (li > de + 10.0f)      girarHastaDespejar(1);
+    else if (de > li + 10.0f) girarHastaDespejar(-1);
+    else if (li > 70.0f)      girarHastaDespejar(1);
+    else                      girarHastaDespejar(-1);
+    Serial.printf("Giro hasta despejar: izq %.0f der %.0f\n", li, de);
     return;
   }
 
@@ -533,6 +570,16 @@ void loop() {
     }
   } else {
     parar();
+    // Con el robot quieto se re-cera el gyro: evita que el rumbo del mapa
+    // derive durante las esperas (tecnica del Maping-robot, MPU + filtro).
+    static unsigned long tCero = 0;
+    static float sumaCero = 0.0f;
+    static int nCero = 0;
+    if (millis() - tCero > 100UL) {
+      tCero = millis();
+      if (leerGyroZ()) { sumaCero += gyroZ; nCero++; }
+      if (nCero >= 5) { gyroBias = sumaCero / nCero; sumaCero = 0.0f; nCero = 0; }
+    }
     static unsigned long tSensores = 0;
     if (millis() - tSensores > 500UL) {
       tSensores = millis();
