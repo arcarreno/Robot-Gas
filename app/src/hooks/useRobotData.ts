@@ -78,43 +78,56 @@ export function useRobotData() {
     return () => clearInterval(t);
   }, [conectado]);
 
+  // Ultimo id ya aplicado: evita duplicar puntos si Realtime y polling
+  // entregan la misma lectura.
+  const ultimoIdRef = useRef(0);
+
+  // Carga inicial + polling de respaldo cada 1 s. Si Realtime no entrega
+  // (publicacion no configurada, WebSocket caido), la app igual se actualiza.
+  useEffect(() => {
+    async function cargarUltima() {
+      const { data: ultima, error: err } = await supabase
+        .from('lecturas_robot')
+        .select('*')
+        .order('timestamp', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (ultima && ultima.id > ultimoIdRef.current) {
+        ultimoIdRef.current = ultima.id;
+        aplicarDB(ultima as LecturaDB);
+      }
+      if (err) setError(err.message);
+      else setConectado(true);
+    }
+
+    cargarUltima();
+    const t = setInterval(cargarUltima, 1000);
+    return () => clearInterval(t);
+  }, [aplicarDB]);
+
   useEffect(() => {
     setError(null);
-    setConectado(false);
-
-    // Carga inmediata de la ultima lectura (no esperar al siguiente INSERT).
-    supabase
-      .from('lecturas_robot')
-      .select('*')
-      .order('timestamp', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-      .then(({ data: ultima, error: err }) => {
-        if (ultima) aplicarDB(ultima as LecturaDB);
-        if (err) setError(err.message);
-      });
 
     const channel = supabase
       .channel(`rmadg1-${intento}`)
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'lecturas_robot' },
-        payload => aplicarDB(payload.new as LecturaDB),
+        payload => {
+          const fila = payload.new as LecturaDB;
+          if (fila.id > ultimoIdRef.current) {
+            ultimoIdRef.current = fila.id;
+            aplicarDB(fila);
+          }
+        },
       )
       .subscribe(status => {
-        if (status === 'SUBSCRIBED') {
-          setConectado(true);
-          setError(null);
-        }
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          setConectado(false);
-          setError('No se pudo conectar con Supabase Realtime.');
-        }
+        if (status === 'SUBSCRIBED') setError(null);
+        // Realtime es un extra: si falla, el polling de 1 s sigue activo.
       });
 
     return () => {
       supabase.removeChannel(channel);
-      setConectado(false);
     };
   }, [intento, aplicarDB]);
 
