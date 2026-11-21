@@ -63,7 +63,9 @@ const unsigned long T_HTTP       = 3000;
 
 /* ===================== ESTADO ===================== */
 WiFiMulti wifi;
-WiFiClientSecure tls;
+// Un cliente TLS por tarea: dos tareas compartiendo tls se bloquean.
+WiFiClientSecure tlsTel;
+WiFiClientSecure tlsCmd;
 
 bool moviendo = false;
 float theta = 0.0f;
@@ -360,11 +362,10 @@ void conectarWiFi() {
 
 void enviarTelemetria() {
   if (WiFi.status() != WL_CONNECTED || SUPABASE_URL[0] == '\0') return;
-  tls.setInsecure();
   HTTPClient http;
   http.setReuse(true);
   http.setTimeout(T_HTTP);
-  if (!http.begin(tls, SUPABASE_URL)) { http.end(); tTelemetria = millis(); return; }
+  if (!http.begin(tlsTel, SUPABASE_URL)) { http.end(); tTelemetria = millis(); return; }
   agregarCabeceras(http);
 
   String body = "{";
@@ -391,11 +392,10 @@ void enviarTelemetria() {
 
 void revisarComandos() {
   if (WiFi.status() != WL_CONNECTED || SUPABASE_CMD_URL[0] == '\0') return;
-  tls.setInsecure();
   HTTPClient http;
   http.setReuse(true);
   http.setTimeout(T_HTTP);
-  if (!http.begin(tls, SUPABASE_CMD_URL)) { http.end(); tComandos = millis(); return; }
+  if (!http.begin(tlsCmd, SUPABASE_CMD_URL)) { http.end(); tComandos = millis(); return; }
   http.addHeader("apikey", SUPABASE_KEY);
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_KEY);
 
@@ -422,7 +422,7 @@ void revisarComandos() {
     HTTPClient patch;
     patch.setReuse(true);
     patch.setTimeout(T_HTTP);
-    if (patch.begin(tls, url)) {
+    if (patch.begin(tlsCmd, url)) {
       agregarCabeceras(patch);
       patch.sendRequest("PATCH", "{\"procesado\":true}");
       patch.end();
@@ -432,31 +432,37 @@ void revisarComandos() {
 
 void descartarComandosViejos() {
   if (WiFi.status() != WL_CONNECTED || SUPABASE_CMD_URL_BASE[0] == '\0') return;
-  tls.setInsecure();
   HTTPClient http;
   http.setTimeout(T_HTTP);
   String base = String(SUPABASE_CMD_URL_BASE);
   int q = base.indexOf('?');
   if (q > 0) base = base.substring(0, q);
-  if (!http.begin(tls, base + "?procesado=eq.false")) { http.end(); return; }
+  if (!http.begin(tlsCmd, base + "?procesado=eq.false")) { http.end(); return; }
   agregarCabeceras(http);
   http.sendRequest("PATCH", "{\"procesado\":true}");
   http.end();
 }
 
-/* La red corre en su propia tarea (nucleo 0). Asi el POST/GET no bloquea
-   el loop de movimiento: telemetria y comandos cada 1 s de verdad. */
-void tareaNube(void *param) {
+/* Dos tareas de red independientes, cada una con su cliente TLS. Si una
+   sola tarea hace POST y GET seguidos, cada ciclo tarda ~3 s y la
+   telemetria no llega cada 1 s. */
+void tareaTelemetria(void *param) {
+  (void)param;
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(100));
+    if (WiFi.status() == WL_CONNECTED) enviarTelemetria();
+  }
+}
+
+void tareaComandos(void *param) {
   (void)param;
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(1000));
-    if (WiFi.status() != WL_CONNECTED) {
+    if (WiFi.status() == WL_CONNECTED) revisarComandos();
+    else {
       static unsigned long tRe = 0;
       if (millis() - tRe > 30000UL) { tRe = millis(); WiFi.reconnect(); }
-      continue;
     }
-    enviarTelemetria();
-    revisarComandos();
   }
 }
 
@@ -502,8 +508,11 @@ void setup() {
   tGyro = millis();
 
   conectarWiFi();
+  tlsTel.setInsecure();
+  tlsCmd.setInsecure();
   descartarComandosViejos();
-  xTaskCreatePinnedToCore(tareaNube, "nube", 8192, NULL, 1, NULL, 0);
+  xTaskCreatePinnedToCore(tareaTelemetria, "telemetria", 8192, NULL, 1, NULL, 0);
+  xTaskCreatePinnedToCore(tareaComandos, "comandos", 8192, NULL, 1, NULL, 0);
 
   dFrente = medirFrente();
   tTelemetria = 0;
