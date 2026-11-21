@@ -1,31 +1,24 @@
 /* =========================================================
    ROBOT AUTONOMO ESP32 - VERSION SIMPLE
    ---------------------------------------------------------
-   Que hace:
-     1. Avanza recto (corrige el rumbo con el giroscopio).
-     2. Si el frente mide menos de 50 cm: se detiene, gira en el
-        sitio 8 pasos de 45 grados midiendo el frente en cada uno,
-        y sale por el rumbo mas despejado.
-     3. Lee el MQ-2 (AO y DO) desde el primer segundo y lo manda a
-        Supabase. Si hay gas, se detiene y la app parpadea.
-     4. Recibe "ini" y "alto" por USB o por Supabase.
+   Avanza con los motores. Si el frente mide menos de 50 cm:
+   para, gira 8 pasos de 45 grados midiendo el frente, y sale
+   por el rumbo mas despejado. Si hay gas, para y la app
+   parpadea. Comandos por USB y por Supabase.
 
-   Sin calibraciones de gas, sin PID de 3 terminos, sin modos.
-   La unica calibracion es la de los motores, que se hace sola la
-   primera vez que se pulsa "ini" (2 segundos, robot en el piso).
+   Sin giroscopio, sin calibraciones, sin PID.
    ========================================================= */
 
 #include <WiFi.h>
 #include <WiFiMulti.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
-#include <Wire.h>
 #include "esp_system.h"
 
 #if __has_include("secrets.h")
   #include "secrets.h"
 #else
-  #warning "Falta secrets.h: el robot arrancara sin WiFi ni Supabase"
+  #warning "Falta secrets.h: el robot arranca sin WiFi ni Supabase"
   struct RedWiFi { const char* ssid; const char* pass; };
   const RedWiFi REDES_WIFI[] = {{"", ""}};
   const int NUM_REDES_WIFI = 0;
@@ -36,253 +29,83 @@
 #endif
 
 /* ===================== PINES ===================== */
-// Motores (L298N)
 const int EN_DER = 4,  IN1 = 12, IN2 = 14;   // motor derecho
 const int EN_IZQ = 15, IN3 = 33, IN4 = 32;   // motor izquierdo
-
-// Encoders (un canal: solo sirven para medir distancia)
-const int ENC_IZQ = 19, ENC_DER = 13;
-
-// Ultrasónicos
 const int TRIG_F = 5,  ECHO_F = 18;
 const int TRIG_L = 17, ECHO_L = 16;
 const int TRIG_R = 25, ECHO_R = 34;
-
-// Bumper frontal (solo emergencia)
-const int BTN_F = 26;
-
-// MQ-2
-const int MQ2_DO = 23;   // salida digital (colector abierto: pull-up)
-const int MQ2_AO = 36;   // salida analogica (ADC1; el ADC2 no va con WiFi)
-
-// LED de estado
-const int LED = 2;
-
-// IMU
-const uint8_t MPU_ADDR = 0x68;
+const int BTN_F  = 26;
+const int MQ2_DO = 23, MQ2_AO = 36;
+const int LED    = 2;
+const int ENC_IZQ = 19, ENC_DER = 13;
 
 /* ===================== AJUSTES ===================== */
-const int VEL_AVANCE = 190;   // PWM de avance (0-255)
-const int VEL_GIRO   = 150;   // PWM de pivote
-const float DIST_OBSTACULO = 50.0f;   // cm: gatillo de la evasion
-const float DIST_LIBRE     = 300.0f;  // cm: "sin eco" = via libre
+const int VEL_AVANCE = 190;
+const int VEL_GIRO   = 170;
+const float DIST_OBSTACULO = 50.0f;
+const float DIST_LIBRE     = 300.0f;
+// Ms que tarda un giro de 45 grados. Ajustar aqui si gira de mas o de menos.
+const unsigned long MS_POR_GRADO = 14;
 
-const float AO_ALARMA = 2.40f;  // V del AO que se considera gas
-const float AO_LIMPIO = 1.60f;  // V por debajo de los cuales se apaga
+// Si al avanzar el robot gira en circulos en vez de ir recto, cambia UNO a -1.
+const int SENTIDO_IZQ = 1;
+const int SENTIDO_DER = 1;
 
 const unsigned long T_TELEMETRIA = 2000;
 const unsigned long T_COMANDOS   = 2000;
-const unsigned long T_HTTP       = 3000;   // el primer TLS puede tardar
-
-// Giro por tiempo si el giroscopio no responde (ms por grado)
-const float MS_POR_GRADO = 13.0f;
+const unsigned long T_HTTP       = 3000;
 
 /* ===================== ESTADO ===================== */
 WiFiMulti wifi;
 WiFiClientSecure tls;
 
 bool moviendo = false;
-float theta = 0.0f;          // rumbo [rad], 0 = el del arranque
-float rumboRecto = 0.0f;     // rumbo que mantiene el avance recto
-float gatillo = DIST_OBSTACULO;
-
+float theta = 0.0f;
 float dFrente = 0, dIzq = 0, dDer = 0;
 
-bool gas = false;
-bool gasCorte = true;
-bool doUtil = false;         // el DO sirve? (si esta saturado en LOW, no)
+bool gas = false, gasCorte = true, doUtil = false;
 float ppm = 0;
-
-int signoIzq = 1, signoDer = 1;   // polaridad real de cada motor
-bool motoresCalibrados = false;
-bool gyroOk = false;
-int gyroSigno = 1;
-float gyroBias = 0.0f;
-float gyroZ = 0.0f;
 
 volatile long encIzq = 0, encDer = 0;
 long prevIzq = 0, prevDer = 0;
 float x = 0.0f, y = 0.0f;
-unsigned long tOdo = 0;
 
 unsigned long tTelemetria = 0, tComandos = 0;
-
 int resetReason = 0;
 
-/* ===================== UTILIDADES ===================== */
-void IRAM_ATTR isrEncIzq() { encIzq++; }
-void IRAM_ATTR isrEncDer() { encDer++; }
-
-float normalizar(float a) {
-  while (a > PI)  a -= 2.0f * PI;
-  while (a < -PI) a += 2.0f * PI;
-  return a;
-}
-
 /* ===================== MOTORES ===================== */
-void motoresRaw(int izq, int der) {
-  // Derecho
-  digitalWrite(IN1, der >= 0 ? HIGH : LOW);
-  digitalWrite(IN2, der >= 0 ? LOW : HIGH);
-  int vd = der >= 0 ? der : -der;
-  ledcWrite(EN_DER, vd > 255 ? 255 : vd);
-
-  // Izquierdo
-  digitalWrite(IN3, izq >= 0 ? HIGH : LOW);
-  digitalWrite(IN4, izq >= 0 ? LOW : HIGH);
-  int vi = izq >= 0 ? izq : -izq;
-  ledcWrite(EN_IZQ, vi > 255 ? 255 : vi);
-}
-
-// Rampa de PWM: 0 -> 190 en ~200 ms. El arranque brusco de los dos motores
-// hunde el riel de 5 V y hace que el comparador del MQ-2 de un pulso falso.
-static int rampaIzq = 0, rampaDer = 0;
-
-int acercar(int actual, int objetivo, int paso) {
-  if (actual < objetivo) return min(actual + paso, objetivo);
-  if (actual > objetivo) return max(actual - paso, objetivo);
-  return actual;
-}
-
-// Positivo = adelante. Aplica la polaridad medida en la calibracion.
 void motores(int izq, int der) {
-  int objIzq = izq * signoIzq;
-  int objDer = der * signoDer;
-  if (objIzq > 255) objIzq = 255; if (objIzq < -255) objIzq = -255;
-  if (objDer > 255) objDer = 255; if (objDer < -255) objDer = -255;
-  rampaIzq = acercar(rampaIzq, objIzq, 16);
-  rampaDer = acercar(rampaDer, objDer, 16);
-  motoresRaw(rampaIzq, rampaDer);
+  izq *= SENTIDO_IZQ;
+  der *= SENTIDO_DER;
+  digitalWrite(IN1, der >= 0 ? HIGH : LOW);
+  digitalWrite(IN2, der >= 0 ? LOW  : HIGH);
+  ledcWrite(EN_DER, der >= 0 ? der : -der);
+
+  digitalWrite(IN3, izq >= 0 ? HIGH : LOW);
+  digitalWrite(IN4, izq >= 0 ? LOW  : HIGH);
+  ledcWrite(EN_IZQ, izq >= 0 ? izq : -izq);
 }
 
-// Parada inmediata (no rampa): vital cuando salta la alarma de gas.
-void parar() {
-  rampaIzq = 0; rampaDer = 0;
-  motoresRaw(0, 0);
-}
+void parar() { motores(0, 0); }
 
-/* ===================== GIROSCOPIO ===================== */
-bool leerGyroZ() {
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(0x47);                       // GYRO_ZOUT_H
-  if (Wire.endTransmission(false) != 0) return false;
-  if (Wire.requestFrom((uint8_t)MPU_ADDR, (uint8_t)2) != 2) return false;
-  int16_t raw = (Wire.read() << 8) | Wire.read();
-  gyroZ = (raw / 65.5f) * DEG_TO_RAD;     // escala +-500 dps
-  return true;
-}
-
-void initMPU() {
-  Wire.beginTransmission(MPU_ADDR); Wire.write(0x6B); Wire.write(0x00); Wire.endTransmission(true);
-  Wire.beginTransmission(MPU_ADDR); Wire.write(0x1B); Wire.write(0x08); Wire.endTransmission(true);
-}
-
-bool calibrarBias() {
-  float suma = 0;
-  int n = 0;
-  for (int i = 0; i < 200; i++) {
-    if (leerGyroZ()) { suma += gyroZ; n++; }
-    delay(2);
-  }
-  if (n < 150) { gyroOk = false; return false; }
-  gyroBias = suma / (float)n;
-  gyroOk = true;
-  return true;
-}
-
-/* Promedio del giroscopio durante una maniobra (radianes, con bias restado). */
-float medirGiro(unsigned long ms) {
-  float acum = 0;
-  unsigned long t0 = millis(), tp = t0;
-  while (millis() - t0 < ms) {
-    if (leerGyroZ()) {
-      unsigned long ahora = millis();
-      acum += (gyroZ - gyroBias) * (ahora - tp) / 1000.0f;
-      tp = ahora;
-    }
-    delay(4);
-  }
-  return acum;
-}
-
-void actualizarTheta() {
-  unsigned long ahora = millis();
-  float dt = (ahora - tOdo) / 1000.0f;
-  if (dt <= 0.0f) return;
-  tOdo = ahora;
-  if (dt > 0.3f) return;
-  if (!leerGyroZ()) return;
-  theta = normalizar(theta + (gyroZ - gyroBias) * gyroSigno * dt);
-}
-
-/* ===================== CALIBRACION DE MOTORES =====================
-   Un motor al reves hace que el robot gire en circulos en vez de
-   avanzar. Aqui se mueve cada rueda por separado y se mira hacia
-   donde rota el chasis: eso dice la polaridad real de cada motor.
-   Se hace una sola vez, con el robot en el piso y espacio libre. */
-float probarRaw(int izq, int der, unsigned long ms) {
-  motoresRaw(izq, der);
-  float d = medirGiro(ms);
-  motoresRaw(0, 0);
-  delay(180);
-  return d;
-}
-
-void calibrarMotores() {
-  if (motoresCalibrados) return;
-  if (!gyroOk && !calibrarBias()) {
-    Serial.println("CAL: sin giroscopio, no se pueden calibrar motores");
-    motoresCalibrados = true;
-    return;
-  }
-
-  Serial.println("CAL: probando motores (2 s, robot en el piso)...");
-  float a = probarRaw( VEL_GIRO, 0, 260);        // izquierda "adelante"
-  float b = probarRaw(0,  VEL_GIRO, 260);        // derecha "adelante"
-
-  // Si las dos ruedas giran en el mismo sentido (mismo signo), una esta
-  // invertida. Se prueban las dos correcciones y gana la que menos rota.
-  if (fabs(a) > 0.05f && fabs(b) > 0.05f && a * b > 0.0f) {
-    float c = probarRaw(-VEL_GIRO,  VEL_GIRO, 260);   // invertir izquierda
-    float e = probarRaw( VEL_GIRO, -VEL_GIRO, 260);   // invertir derecha
-    if (fabs(c) < fabs(e)) signoIzq = -1;
-    else                   signoDer = -1;
-    Serial.printf("CAL: motor invertido -> izq=%+d der=%+d\n", signoIzq, signoDer);
-  }
-
-  // Con los motores ya corregidos, un pivote a la izquierda debe aumentar
-  // theta. Si el giroscopio esta montado al reves, se invierte su signo.
-  float p = probarRaw(-VEL_GIRO * signoIzq, VEL_GIRO * signoDer, 300);
-  if (fabs(p) < 0.08f) {
-    gyroOk = false;
-    Serial.println("CAL: el chasis no giro, se usaran giros por tiempo");
-  } else {
-    gyroSigno = (p > 0.0f) ? 1 : -1;
-    Serial.printf("CAL: OK izq=%+d der=%+d gyro=%+d\n", signoIzq, signoDer, gyroSigno);
-  }
-  motoresCalibrados = true;
-}
-
-/* ===================== SENSORES ===================== */
+/* ===================== ULTRASONIDO ===================== */
 float medir(int trig, int echo) {
   digitalWrite(trig, LOW);  delayMicroseconds(3);
   digitalWrite(trig, HIGH); delayMicroseconds(10);
   digitalWrite(trig, LOW);
-  unsigned long us = pulseIn(echo, HIGH, 18000UL);  // 18 ms ~ 3 m
-  if (us == 0) return 0.0f;              // sin eco
+  unsigned long us = pulseIn(echo, HIGH, 18000UL);
+  if (us == 0) return 0.0f;              // sin eco = via libre
   return us * 0.0343f / 2.0f;
 }
 
 float medirFrente() {
-  float v[3];
-  int n = 0;
+  float v[3]; int n = 0;
   for (int i = 0; i < 3; i++) {
     float d = medir(TRIG_F, ECHO_F);
     if (d > 2.0f) v[n++] = d;
     delay(6);
   }
-  if (n == 0) return DIST_LIBRE;         // sin eco = via libre
-  // mediana
+  if (n == 0) return DIST_LIBRE;
   for (int i = 0; i < n - 1; i++)
     for (int j = i + 1; j < n; j++)
       if (v[j] < v[i]) { float t = v[i]; v[i] = v[j]; v[j] = t; }
@@ -294,115 +117,53 @@ float medirLado(int trig, int echo) {
   return (d > 2.0f) ? d : 0.0f;
 }
 
+/* ===================== GAS ===================== */
 void leerGas() {
   static unsigned long tMuestra = 0;
-  static uint32_t histDO = 0;    // ultimas 24 muestras (1 bit c/u = 1.2 s)
-
+  static uint32_t histDO = 0;
   unsigned long ahora = millis();
-  if (ahora - tMuestra < 50) return;   // 20 muestras por segundo
+  if (ahora - tMuestra < 50) return;
   tMuestra = ahora;
 
   int nivelDO = digitalRead(MQ2_DO);
-  int adc = analogRead(MQ2_AO);
-  float v = adc * (3.3f / 4095.0f);
-
-  // Estimacion para la app (el MQ-2 no es lineal ni exacto).
+  float v = analogRead(MQ2_AO) * (3.3f / 4095.0f);
   ppm = (v - 0.8f) * 800.0f;
   if (ppm < 0.0f) ppm = 0.0f;
   if (ppm > 9999.0f) ppm = 9999.0f;
-
-  // Este modulo entrega el DO en HIGH con gas y en LOW con aire limpio.
-  // Si el pin estuviera al aire, el pull-up lo dejaria siempre en HIGH: por
-  // eso el DO solo se usa despues de haberlo visto en LOW (esta conectado).
   if (nivelDO == LOW) doUtil = true;
 
   histDO = (histDO << 1) | (nivelDO == HIGH ? 1UL : 0UL);
   uint8_t altos = 0;
   for (int i = 0; i < 24; i++) altos += (histDO >> i) & 1UL;
 
-  // Filtro por MAYORIA: el pico de corriente de los motores hace que el
-  // comparador del MQ-2 de un pulso de ~0.5 s. Exigir 20 de 24 muestras en
-  // HIGH (1.2 s) descarta ese glitch sin perder un gas real.
-  bool doGas    = doUtil && (altos >= 20);
-  bool doLimpio = (altos <= 2);
-
-  if (doGas || v >= AO_ALARMA) {
-    if (!gas) Serial.printf("GAS: alarma (DO %d/24, AO %.2fV)\n", altos, v);
-    gas = true;
-  } else if (doLimpio && v <= AO_LIMPIO) {
-    if (gas) Serial.println("GAS: aire limpio, alarma liberada");
-    gas = false;
-  }
+  if (doUtil && altos >= 20) gas = true;
+  else if (altos <= 2)       gas = false;
 }
 
 /* ===================== MOVIMIENTO ===================== */
-void avanzar() {
-  int corr = 0;
-  if (gyroOk) {
-    float err = normalizar(rumboRecto - theta);
-    corr = (int)(err * 70.0f);
-    if (corr > 35)  corr = 35;
-    if (corr < -35) corr = -35;
-  }
-  int vel = VEL_AVANCE;
-  if (dFrente > 0.0f && dFrente < 90.0f) {
-    vel = (int)(90.0f + (dFrente / 90.0f) * (VEL_AVANCE - 90.0f));
-  }
-  motores(vel - corr, vel + corr);
-}
+void atenderSerial();
 
-/* Gira "grados" en el sitio. Positivo = izquierda. */
-void girarGrados(float grados) {
-  if (fabs(grados) < 1.0f) return;
+/* Gira grados en el sitio. Positivo = izquierda. */
+void girar(int grados) {
+  if (grados == 0) return;
+  unsigned long ms = (unsigned long)(abs(grados) * MS_POR_GRADO);
 
-  if (!gyroOk) {
-    unsigned long ms = (unsigned long)(fabs(grados) * MS_POR_GRADO);
-    if (grados > 0.0f) motores(-VEL_GIRO, VEL_GIRO);
-    else               motores(VEL_GIRO, -VEL_GIRO);
-    unsigned long t0 = millis();
-    while (millis() - t0 < ms) {
-      atenderSerial();
-      if (!moviendo) break;
-      leerGas();
-      if (gas && gasCorte) break;
-      delay(5);
-    }
-    parar();
-    delay(120);
-    tOdo = millis();                 // el giro ya se conto aqui: no re-integrar
-    theta = normalizar(theta + grados * DEG_TO_RAD);
-    return;
-  }
+  if (grados > 0) motores(-VEL_GIRO, VEL_GIRO);
+  else            motores( VEL_GIRO, -VEL_GIRO);
 
-  float objetivo = fabs(grados) * DEG_TO_RAD;
-  float girado = 0.0f;
-  unsigned long t0 = millis(), tp = t0;
-  unsigned long tope = (unsigned long)(fabs(grados) * 30.0f) + 1500UL;
-
-  while (millis() - t0 < tope) {
-    if (leerGyroZ()) {
-      unsigned long ahora = millis();
-      girado += (gyroZ - gyroBias) * gyroSigno * (ahora - tp) / 1000.0f;
-      tp = ahora;
-    }
-    float err = objetivo - girado;
-    if (fabs(err) < 0.06f) break;                 // ~3.4 grados
-    int v = (int)(fabs(err) * 110.0f);
-    if (v < 80)  v = 80;
-    if (v > VEL_GIRO) v = VEL_GIRO;
-    if (err > 0.0f) motores(-v, v);
-    else            motores(v, -v);
-
+  unsigned long t0 = millis();
+  while (millis() - t0 < ms) {
+    atenderSerial();
     leerGas();
     if (gas && gasCorte) break;
-    atenderSerial();
     if (!moviendo) break;
     delay(8);
   }
   parar();
-  delay(130);
-  tOdo = millis();                   // el giro ya se conto aqui: no re-integrar
-  theta = normalizar(theta + girado);
+  delay(120);
+  theta += grados * DEG_TO_RAD;
+  while (theta >  PI) theta -= 2 * PI;
+  while (theta < -PI) theta += 2 * PI;
 }
 
 /* Barrido de 360 en 8 pasos de 45 y salida por el mejor rumbo. */
@@ -411,65 +172,44 @@ void esquivar() {
   delay(150);
 
   float mejorDist = medirFrente();
-  float mejorAng = 0.0f;
+  int mejorPaso = 0;
 
   for (int i = 1; i <= 8; i++) {
-    girarGrados(45.0f);
-    if (!moviendo) return;
-    if (gas && gasCorte) return;
-    delay(100);
+    girar(45);
+    if (!moviendo || (gas && gasCorte)) return;
+    delay(80);
     float d = medirFrente();
     if (d > mejorDist) {
       mejorDist = d;
-      mejorAng = i * 45.0f;
+      mejorPaso = i;
     }
   }
 
-  // Estamos de vuelta en el rumbo inicial: ir al mejor.
-  if (mejorAng > 180.0f) mejorAng -= 360.0f;
-  if (mejorDist < 30.0f) {
-    girarGrados(180.0f);              // todo cerrado: media vuelta
-  } else if (fabs(mejorAng) >= 1.0f) {
-    girarGrados(mejorAng);
-  }
+  int giro = mejorPaso * 45;
+  if (giro > 180) giro -= 360;
+  if (mejorDist < 30.0f) girar(180);
+  else if (giro != 0) girar(giro);
 
-  rumboRecto = theta;
-  // Si el mejor hueco era de 40 cm, no tiene sentido volver a barrer a los
-  // 50: se baja el gatillo a la mitad de ese hueco (minimo 20 cm).
-  gatillo = mejorDist * 0.5f;
-  if (gatillo < 20.0f) gatillo = 20.0f;
-  if (gatillo > DIST_OBSTACULO) gatillo = DIST_OBSTACULO;
+  Serial.printf("Evasion: mejor %.0f cm, paso %d\n", mejorDist, mejorPaso);
 
   prevIzq = encIzq;
   prevDer = encDer;
-
-  Serial.printf("Evasion: mejor %.0f cm, gatillo %.0f cm\n", mejorDist, gatillo);
 }
 
-/* ===================== LED ===================== */
 void actualizarLED() {
   unsigned long t = millis();
-  if (gas) {
-    digitalWrite(LED, (t / 150) % 2);       // gas: parpadeo rapido
-  } else if (moviendo) {
-    digitalWrite(LED, HIGH);                // moviendo: fijo
-  } else {
-    digitalWrite(LED, (t / 800) % 2);       // reposo: latido lento
-  }
+  if (gas)                  digitalWrite(LED, (t / 150) % 2);
+  else if (moviendo)        digitalWrite(LED, HIGH);
+  else                      digitalWrite(LED, (t / 800) % 2);
 }
 
 /* ===================== COMANDOS ===================== */
 void iniciar() {
   parar();
-  delay(120);
-  calibrarBias();        // bias fresco antes de medir la polaridad
-  calibrarMotores();
+  delay(100);
   theta = 0.0f;
-  rumboRecto = 0.0f;
-  gatillo = DIST_OBSTACULO;
   prevIzq = encIzq;
   prevDer = encDer;
-  tOdo = millis();
   moviendo = true;
   Serial.println("ACK:INI");
 }
@@ -487,19 +227,14 @@ void ejecutarComando(String cmd) {
   } else if (cmd == "ping") {
     Serial.println("ACK:PONG");
   } else if (cmd == "gasoff") {
-    gasCorte = false;
-    gas = false;
+    gasCorte = false; gas = false;
     Serial.println("ACK:GASOFF");
   } else if (cmd == "gason") {
     gasCorte = true;
     Serial.println("ACK:GASON");
-  } else if (cmd == "cal") {
-    motoresCalibrados = false;
-    calibrarMotores();
-    Serial.println("ACK:CAL");
   } else if (cmd == "mq2") {
-    Serial.printf("MQ2: AO=%.2fV ppm=%.0f DO=%s doUtil=%d gas=%d\n",
-                  analogRead(MQ2_AO) * 3.3f / 4095.0f, ppm,
+    Serial.printf("MQ2: AO=%.2fV DO=%s doUtil=%d gas=%d\n",
+                  analogRead(MQ2_AO) * 3.3f / 4095.0f,
                   digitalRead(MQ2_DO) == HIGH ? "HIGH" : "LOW",
                   (int)doUtil, (int)gas);
   } else {
@@ -514,11 +249,8 @@ void atenderSerial() {
     if (c == '\n' || c == '\r') {
       if (buf.length()) ejecutarComando(buf);
       buf = "";
-    } else if (buf.length() < 32) {
-      buf += c;
-    } else {
-      buf = "";
-    }
+    } else if (buf.length() < 32) buf += c;
+    else buf = "";
   }
 }
 
@@ -531,25 +263,23 @@ void agregarCabeceras(HTTPClient &http) {
 }
 
 void conectarWiFi() {
-  for (int i = 0; i < NUM_REDES_WIFI; i++) {
+  for (int i = 0; i < NUM_REDES_WIFI; i++)
     if (REDES_WIFI[i].ssid[0]) wifi.addAP(REDES_WIFI[i].ssid, REDES_WIFI[i].pass);
-  }
+
   Serial.print("WiFi");
   unsigned long t0 = millis();
   while (wifi.run() != WL_CONNECTED && millis() - t0 < 20000UL) {
     delay(500);
     Serial.print(".");
   }
-  if (WiFi.status() == WL_CONNECTED) {
+  if (WiFi.status() == WL_CONNECTED)
     Serial.printf("\nWiFi OK: %s | IP %s\n", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
-  } else {
-    Serial.println("\nWiFi: sin conexion (el robot funciona igual)");
-  }
+  else
+    Serial.println("\nWiFi: sin conexion");
 }
 
 void enviarTelemetria() {
   if (WiFi.status() != WL_CONNECTED || SUPABASE_URL[0] == '\0') return;
-
   tls.setInsecure();
   HTTPClient http;
   http.setReuse(true);
@@ -581,7 +311,6 @@ void enviarTelemetria() {
 
 void revisarComandos() {
   if (WiFi.status() != WL_CONNECTED || SUPABASE_CMD_URL[0] == '\0') return;
-
   tls.setInsecure();
   HTTPClient http;
   http.setReuse(true);
@@ -592,18 +321,13 @@ void revisarComandos() {
 
   String cmd = "";
   long id = 0;
-
-  int code = http.GET();
-  if (code == 200) {
+  if (http.GET() == 200) {
     String s = http.getString();
-
     int ic = s.indexOf("\"comando\":\"");
     int ii = s.indexOf("\"id\":");
     if (ic >= 0 && ii >= 0) {
-      int ini = ic + 11;
-      int fin = s.indexOf('"', ini);
+      int ini = ic + 11, fin = s.indexOf('"', ini);
       if (fin > ini) cmd = s.substring(ini, fin);
-
       int p = ii + 5;
       while (p < (int)s.length() && isDigit(s[p])) { id = id * 10 + (s[p] - '0'); p++; }
     }
@@ -611,8 +335,6 @@ void revisarComandos() {
   http.end();
   tComandos = millis();
 
-  // Primero se cierra el GET y luego se ejecuta y se marca: asi el PATCH no
-  // comparte el cliente TLS con una respuesta que sigue abierta.
   if (cmd.length()) ejecutarComando(cmd);
 
   if (id > 0) {
@@ -636,12 +358,10 @@ void descartarComandosViejos() {
   String base = String(SUPABASE_CMD_URL_BASE);
   int q = base.indexOf('?');
   if (q > 0) base = base.substring(0, q);
-  String url = base + "?procesado=eq.false";
-  if (!http.begin(tls, url)) { http.end(); return; }
+  if (!http.begin(tls, base + "?procesado=eq.false")) { http.end(); return; }
   agregarCabeceras(http);
   http.sendRequest("PATCH", "{\"procesado\":true}");
   http.end();
-  Serial.println("Comandos viejos descartados");
 }
 
 void tareaNube() {
@@ -651,24 +371,21 @@ void tareaNube() {
     return;
   }
 
-  bool despejado = !moviendo || dFrente > 150.0f;
-  bool hayTel = (millis() - tTelemetria > T_TELEMETRIA && despejado) ||
-                (millis() - tTelemetria > 8000UL);
-  bool hayCmd = (millis() - tComandos > T_COMANDOS && (!moviendo || dFrente > 60.0f)) ||
-                (millis() - tComandos > 5000UL);
+  bool tocaTel = millis() - tTelemetria > T_TELEMETRIA ||
+                 millis() - tTelemetria > 8000UL;
+  bool tocaCmd = millis() - tComandos > T_COMANDOS ||
+                 millis() - tComandos > 5000UL;
 
-  // El WiFi + TLS suma su pico de corriente al de los motores. Siempre se
-  // detienen antes de ANY HTTP (antes solo se hacia en los casos forzados).
-  if (moviendo && (hayTel || hayCmd)) parar();
+  if (moviendo && (tocaTel || tocaCmd)) parar();
 
-  if (hayTel) {
-    enviarTelemetria();
-  } else if (hayCmd) {
-    revisarComandos();
-  }
+  if (tocaTel)      enviarTelemetria();
+  else if (tocaCmd) revisarComandos();
 }
 
-/* ===================== SETUP ===================== */
+/* ===================== SETUP / LOOP ===================== */
+void IRAM_ATTR isrEncIzq() { encIzq++; }
+void IRAM_ATTR isrEncDer() { encDer++; }
+
 void setup() {
   Serial.begin(115200);
   delay(300);
@@ -676,20 +393,15 @@ void setup() {
   resetReason = (int)esp_reset_reason();
   Serial.printf("Reset: %d\n", resetReason);
 
-  pinMode(EN_DER, OUTPUT); pinMode(EN_IZQ, OUTPUT);
-  pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT);
-  pinMode(IN3, OUTPUT); pinMode(IN4, OUTPUT);
-  pinMode(LED, OUTPUT);
+  pinMode(EN_DER, OUTPUT); pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT);
+  pinMode(EN_IZQ, OUTPUT); pinMode(IN3, OUTPUT); pinMode(IN4, OUTPUT);
   pinMode(TRIG_F, OUTPUT); pinMode(ECHO_F, INPUT);
   pinMode(TRIG_L, OUTPUT); pinMode(ECHO_L, INPUT);
   pinMode(TRIG_R, OUTPUT); pinMode(ECHO_R, INPUT);
   pinMode(BTN_F, INPUT_PULLUP);
-  pinMode(ENC_IZQ, INPUT_PULLDOWN);
-  pinMode(ENC_DER, INPUT_PULLDOWN);
-  pinMode(MQ2_DO, INPUT_PULLUP);
-  pinMode(MQ2_AO, INPUT);
-
-  analogReadResolution(12);
+  pinMode(ENC_IZQ, INPUT_PULLDOWN); pinMode(ENC_DER, INPUT_PULLDOWN);
+  pinMode(MQ2_DO, INPUT_PULLUP); pinMode(MQ2_AO, INPUT);
+  pinMode(LED, OUTPUT);
 
   ledcAttach(EN_DER, 5000, 8);
   ledcAttach(EN_IZQ, 5000, 8);
@@ -698,31 +410,15 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENC_IZQ), isrEncIzq, RISING);
   attachInterrupt(digitalPinToInterrupt(ENC_DER), isrEncDer, RISING);
 
-  Wire.begin();
-  Wire.setTimeOut(100);
-  initMPU();
-  delay(150);
-  if (calibrarBias()) Serial.println("IMU OK");
-  else Serial.println("IMU: no responde");
-
-  // El DO de este modulo va en LOW con aire limpio y en HIGH con gas.
-  // doUtil se habilita en cuanto el pin se ve en LOW: asi un DO al aire
-  // (que el pull-up mantendria en HIGH) nunca dispara una falsa alarma.
-  delay(100);
-  doUtil = false;
-  Serial.printf("MQ2: DO inicial=%s (se habilita al verlo en LOW)\n",
-                digitalRead(MQ2_DO) == HIGH ? "HIGH" : "LOW");
-
   conectarWiFi();
   descartarComandosViejos();
 
   dFrente = medirFrente();
-  tOdo = millis();
   tTelemetria = 0;
   tComandos = 0;
+  Serial.println("Listo");
 }
 
-/* ===================== LOOP ===================== */
 void loop() {
   atenderSerial();
   leerGas();
@@ -735,9 +431,6 @@ void loop() {
   }
 
   if (moviendo) {
-    actualizarTheta();
-
-    // Distancia recorrida (solo avance; en los pivotes no se cuenta)
     long ei = encIzq, ed = encDer;
     float d = ((ei - prevIzq) + (ed - prevDer)) * 0.5f * (2.0f * PI * 0.03f / 20.0f);
     prevIzq = ei;
@@ -746,20 +439,16 @@ void loop() {
     y += d * sin(theta);
 
     dFrente = medirFrente();
-
     static bool lado = false;
     if (lado) dIzq = medirLado(TRIG_L, ECHO_L);
     else      dDer = medirLado(TRIG_R, ECHO_R);
     lado = !lado;
 
-    if (digitalRead(BTN_F) == LOW) {
-      Serial.println("Bumper: esquivando");
-      esquivar();
-    } else if (dFrente > 0.0f && dFrente < gatillo) {
+    if (digitalRead(BTN_F) == LOW || (dFrente > 0.0f && dFrente < DIST_OBSTACULO)) {
       Serial.printf("Obstaculo a %.0f cm\n", dFrente);
       esquivar();
     } else {
-      avanzar();
+      motores(VEL_AVANCE, VEL_AVANCE);   // AVANZAR, sin correcciones
     }
   } else {
     parar();
