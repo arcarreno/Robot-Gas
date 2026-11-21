@@ -134,13 +134,31 @@ void motoresRaw(int izq, int der) {
   ledcWrite(EN_IZQ, vi > 255 ? 255 : vi);
 }
 
-// Positivo = adelante. Aplica la polaridad medida en la calibracion.
-void motores(int izq, int der) {
-  motoresRaw(izq * signoIzq, der * signoDer);
+// Rampa de PWM: 0 -> 190 en ~200 ms. El arranque brusco de los dos motores
+// hunde el riel de 5 V y hace que el comparador del MQ-2 de un pulso falso.
+static int rampaIzq = 0, rampaDer = 0;
+
+int acercar(int actual, int objetivo, int paso) {
+  if (actual < objetivo) return min(actual + paso, objetivo);
+  if (actual > objetivo) return max(actual - paso, objetivo);
+  return actual;
 }
 
+// Positivo = adelante. Aplica la polaridad medida en la calibracion.
+void motores(int izq, int der) {
+  int objIzq = izq * signoIzq;
+  int objDer = der * signoDer;
+  if (objIzq > 255) objIzq = 255; if (objIzq < -255) objIzq = -255;
+  if (objDer > 255) objDer = 255; if (objDer < -255) objDer = -255;
+  rampaIzq = acercar(rampaIzq, objIzq, 16);
+  rampaDer = acercar(rampaDer, objDer, 16);
+  motoresRaw(rampaIzq, rampaDer);
+}
+
+// Parada inmediata (no rampa): vital cuando salta la alarma de gas.
 void parar() {
-  motores(0, 0);
+  rampaIzq = 0; rampaDer = 0;
+  motoresRaw(0, 0);
 }
 
 /* ===================== GIROSCOPIO ===================== */
@@ -278,10 +296,10 @@ float medirLado(int trig, int echo) {
 
 void leerGas() {
   static unsigned long tMuestra = 0;
-  static uint8_t altoSeg = 0, bajoSeg = 0;
+  static uint32_t histDO = 0;    // ultimas 24 muestras (1 bit c/u = 1.2 s)
 
   unsigned long ahora = millis();
-  if (ahora - tMuestra < 100) return;   // 10 muestras por segundo
+  if (ahora - tMuestra < 50) return;   // 20 muestras por segundo
   tMuestra = ahora;
 
   int nivelDO = digitalRead(MQ2_DO);
@@ -298,15 +316,21 @@ void leerGas() {
   // eso el DO solo se usa despues de haberlo visto en LOW (esta conectado).
   if (nivelDO == LOW) doUtil = true;
 
-  if (nivelDO == HIGH) { if (altoSeg < 5)  altoSeg++; bajoSeg = 0; }
-  else                 { if (bajoSeg < 10) bajoSeg++; altoSeg = 0; }
+  histDO = (histDO << 1) | (nivelDO == HIGH ? 1UL : 0UL);
+  uint8_t altos = 0;
+  for (int i = 0; i < 24; i++) altos += (histDO >> i) & 1UL;
 
-  bool doGas    = doUtil && altoSeg >= 5;          // 500 ms seguidos en HIGH
-  bool doLimpio = (altoSeg == 0 && bajoSeg >= 10); // 1 s seguido en LOW
+  // Filtro por MAYORIA: el pico de corriente de los motores hace que el
+  // comparador del MQ-2 de un pulso de ~0.5 s. Exigir 20 de 24 muestras en
+  // HIGH (1.2 s) descarta ese glitch sin perder un gas real.
+  bool doGas    = doUtil && (altos >= 20);
+  bool doLimpio = (altos <= 2);
 
   if (doGas || v >= AO_ALARMA) {
+    if (!gas) Serial.printf("GAS: alarma (DO %d/24, AO %.2fV)\n", altos, v);
     gas = true;
   } else if (doLimpio && v <= AO_LIMPIO) {
+    if (gas) Serial.println("GAS: aire limpio, alarma liberada");
     gas = false;
   }
 }
@@ -628,16 +652,18 @@ void tareaNube() {
   }
 
   bool despejado = !moviendo || dFrente > 150.0f;
-  bool forzarTel = (millis() - tTelemetria > 8000UL);
-  bool forzarCmd = (millis() - tComandos > 5000UL);
+  bool hayTel = (millis() - tTelemetria > T_TELEMETRIA && despejado) ||
+                (millis() - tTelemetria > 8000UL);
+  bool hayCmd = (millis() - tComandos > T_COMANDOS && (!moviendo || dFrente > 60.0f)) ||
+                (millis() - tComandos > 5000UL);
 
-  // Cerca de una pared el robot no puede seguir avanzando a ciegas mientras
-  // dura el POST. Se detiene un instante, publica y el loop reanuda.
-  if (moviendo && (forzarTel || forzarCmd)) parar();
+  // El WiFi + TLS suma su pico de corriente al de los motores. Siempre se
+  // detienen antes de ANY HTTP (antes solo se hacia en los casos forzados).
+  if (moviendo && (hayTel || hayCmd)) parar();
 
-  if ((millis() - tTelemetria > T_TELEMETRIA && despejado) || forzarTel) {
+  if (hayTel) {
     enviarTelemetria();
-  } else if ((millis() - tComandos > T_COMANDOS && (!moviendo || dFrente > 60.0f)) || forzarCmd) {
+  } else if (hayCmd) {
     revisarComandos();
   }
 }
