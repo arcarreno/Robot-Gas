@@ -371,15 +371,11 @@ void tareaNube() {
     return;
   }
 
-  bool tocaTel = millis() - tTelemetria > T_TELEMETRIA ||
-                 millis() - tTelemetria > 8000UL;
-  bool tocaCmd = millis() - tComandos > T_COMANDOS ||
-                 millis() - tComandos > 5000UL;
-
-  if (moviendo && (tocaTel || tocaCmd)) parar();
-
-  if (tocaTel)      enviarTelemetria();
-  else if (tocaCmd) revisarComandos();
+  // El PWM es hardware: NO hay que parar los motores para enviar HTTP.
+  // Pararlos aqui era lo que hacia que avanzara 1 s y se detuviera 3 s.
+  // Solo se espacia el HTTP para que no bloquee el loop cada 2 s.
+  if (millis() - tTelemetria > 5000UL) enviarTelemetria();
+  else if (millis() - tComandos > 5000UL) revisarComandos();
 }
 
 /* ===================== SETUP / LOOP ===================== */
