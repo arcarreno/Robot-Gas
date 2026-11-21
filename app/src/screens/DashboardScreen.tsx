@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   Animated,
   Pressable,
   ScrollView,
@@ -12,6 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MapCanvas } from '../components/MapCanvas';
 import { GasGauge } from '../components/GasGauge';
+import { Icon } from '../components/Icon';
 import { useRobotData } from '../hooks/useRobotData';
 import { supabase } from '../lib/supabase';
 import { ROBOT_ID } from '../config';
@@ -28,13 +28,12 @@ export function DashboardScreen() {
     sinDatos,
     error,
     resetContador,
-    reconectar,
     reiniciarMapa,
   } = useRobotData();
 
   useEffect(() => {
     if (!aviso) return;
-    const t = setTimeout(() => setAviso(null), 4000);
+    const t = setTimeout(() => setAviso(null), 3500);
     return () => clearTimeout(t);
   }, [aviso]);
 
@@ -51,9 +50,10 @@ export function DashboardScreen() {
   }
 
   const gasAlerta = !!data?.sensors.gasAlerta;
-  const anchoMapa = Math.min(width - space.lg * 2, 760);
+  const anchoMapa = Math.min(width - space.lg * 2, 900);
+  const numPuntos = trajectory.length;
+  const numGas = gasPoints.length;
 
-  // Parpadeo de pantalla completa mientras haya gas (requisito del proyecto).
   const pulso = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (!gasAlerta) {
@@ -63,8 +63,8 @@ export function DashboardScreen() {
     }
     const ciclo = Animated.loop(
       Animated.sequence([
-        Animated.timing(pulso, { toValue: 1, duration: 420, useNativeDriver: true }),
-        Animated.timing(pulso, { toValue: 0, duration: 420, useNativeDriver: true }),
+        Animated.timing(pulso, { toValue: 1, duration: 400, useNativeDriver: true }),
+        Animated.timing(pulso, { toValue: 0, duration: 400, useNativeDriver: true }),
       ]),
     );
     ciclo.start();
@@ -85,117 +85,98 @@ export function DashboardScreen() {
               <Text style={styles.titulo}>RMADG1</Text>
               <Text style={styles.subtitulo}>Vehículo terrestre autónomo</Text>
             </View>
-            <View style={[styles.estado, conectado ? styles.estadoOk : styles.estadoOff]}>
+            <View style={styles.estado}>
               <View
                 style={[
                   styles.punto,
                   { backgroundColor: conectado ? colors.success : colors.warning },
                 ]}
               />
-              <Text style={[styles.estadoTexto, conectado ? styles.estadoOkTexto : styles.estadoOffTexto]}>
+              <Text style={styles.estadoTexto}>
                 {conectado ? 'En línea' : 'Sin enlace'}
               </Text>
             </View>
           </View>
 
-          {!!error && (
-            <Banner tono="aviso" texto={error} accion="Reintentar" onAccion={reconectar} />
-          )}
-          {!conectado && !error && (
-            <View style={[styles.banner, styles.bannerNeutro]}>
-              <ActivityIndicator size="small" color={colors.primary} />
-              <Text style={styles.bannerTexto}>Conectando con la telemetría…</Text>
-            </View>
-          )}
+          {!!error && <Text style={styles.error}>{error}</Text>}
           {conectado && sinDatos && (
-            <Banner
-              tono="aviso"
-              texto="Enlace listo. Esperando la primera lectura del ESP32."
-            />
+            <Text style={styles.aviso}>Enlace listo. Esperando la primera lectura…</Text>
           )}
-          {!!aviso && <Banner tono="info" texto={aviso} />}
+          {!!aviso && <Text style={styles.avisoInfo}>{aviso}</Text>}
 
-          {data ? (
-            <GasGauge
-              valor={data.sensors.gas}
-              alerta={data.sensors.gasAlerta}
-              ppm={data.sensors.gasPpm}
-            />
-          ) : (
-            <View style={styles.cargando}>
-              <ActivityIndicator size="small" color={colors.primary} />
-              <Text style={styles.cargandoTexto}>Cargando estado del sensor…</Text>
-            </View>
-          )}
+          <GasGauge
+            valor={data?.sensors.gas ?? 0}
+            alerta={gasAlerta}
+            ppm={data?.sensors.gasPpm}
+          />
 
-          <Tarjeta
-            titulo="Mapa de ruta"
-            sub="El rojo marca únicamente donde se detectó gas"
-          >
+          <Seccion titulo="MAPA DE RUTA" meta={`${numPuntos} puntos · ${numGas} gas`}>
             <MapCanvas
               trajectory={trajectory}
               gasPoints={gasPoints}
               robot={data ? data.pose : null}
               width={anchoMapa}
-              height={300}
+              height={320}
               resetKey={resetContador}
             />
             <Text style={styles.pista}>
-              Pellizca para acercar · arrastra para mover · doble toque para centrar
+              Pellizca · arrastra · doble toque para centrar
             </Text>
-          </Tarjeta>
+          </Seccion>
 
-          <Tarjeta titulo="Distancias" sub="Ultrasónicos del robot">
+          <Seccion titulo="DISTANCIAS" meta="ultrasónicos">
             <View style={styles.metricas}>
-              <Metrica etiqueta="Frente" valor={data?.sensors.front ?? 0} />
-              <Metrica etiqueta="Izquierda" valor={data?.sensors.left ?? 0} />
-              <Metrica etiqueta="Derecha" valor={data?.sensors.right ?? 0} />
+              <Metrica etiqueta="FRENTE" valor={data?.sensors.front ?? 0} />
+              <Metrica etiqueta="IZQ" valor={data?.sensors.left ?? 0} />
+              <Metrica etiqueta="DER" valor={data?.sensors.right ?? 0} />
             </View>
-          </Tarjeta>
+          </Seccion>
 
-          <Tarjeta titulo="Posición" sub={`Último dato: ${ultimaHora}`}>
+          <Seccion titulo="POSICIÓN" meta={ultimaHora}>
             <View style={styles.filas}>
-              <Fila etiqueta="X" valor={data ? `${data.pose.x.toFixed(1)} cm` : '—'} />
-              <Fila etiqueta="Y" valor={data ? `${data.pose.y.toFixed(1)} cm` : '—'} />
-              <Fila
-                etiqueta="Rumbo"
-                valor={data ? `${data.pose.theta.toFixed(2)} rad` : '—'}
+              <Dato etiqueta="X" valor={data ? `${data.pose.x.toFixed(0)} cm` : '—'} />
+              <Dato etiqueta="Y" valor={data ? `${data.pose.y.toFixed(0)} cm` : '—'} />
+              <Dato
+                etiqueta="RUMBO"
+                valor={data ? `${(data.pose.theta * 180 / Math.PI).toFixed(0)}°` : '—'}
               />
             </View>
-          </Tarjeta>
+          </Seccion>
 
-          <Tarjeta titulo="Control" sub="Las órdenes viajan a Supabase">
-            <View style={styles.botones}>
-              <Pressable
-                style={[styles.boton, styles.botonIniciar]}
-                onPress={() => enviar('ini')}
-                accessibilityRole="button"
-                accessibilityLabel="Iniciar el robot"
-              >
-                <Text style={styles.botonTexto}>▶  Iniciar</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.boton, styles.botonDetener]}
-                onPress={() => enviar('alto')}
-                accessibilityRole="button"
-                accessibilityLabel="Detener el robot"
-              >
-                <Text style={styles.botonTexto}>■  Detener</Text>
-              </Pressable>
-            </View>
+          <View style={styles.controles}>
             <Pressable
-              style={styles.botonSecundario}
-              onPress={reiniciarMapa}
+              style={[styles.boton, styles.botonIniciar]}
+              onPress={() => enviar('ini')}
               accessibilityRole="button"
-              accessibilityLabel="Limpiar el mapa"
+              accessibilityLabel="Iniciar el robot"
             >
-              <Text style={styles.botonSecundarioTexto}>Limpiar mapa</Text>
+              <View style={styles.botonContenido}>
+                <Icon nombre="play" size={18} color="#FFFFFF" />
+                <Text style={styles.botonTexto}>Iniciar</Text>
+              </View>
             </Pressable>
-          </Tarjeta>
+            <Pressable
+              style={[styles.boton, styles.botonDetener]}
+              onPress={() => enviar('alto')}
+              accessibilityRole="button"
+              accessibilityLabel="Detener el robot"
+            >
+              <View style={styles.botonContenido}>
+                <Icon nombre="stop" size={16} color="#FFFFFF" />
+                <Text style={styles.botonTexto}>Detener</Text>
+              </View>
+            </Pressable>
+          </View>
+          <Pressable
+            style={styles.botonSecundario}
+            onPress={reiniciarMapa}
+            accessibilityRole="button"
+            accessibilityLabel="Limpiar el mapa"
+          >
+            <Text style={styles.botonSecundarioTexto}>Limpiar mapa</Text>
+          </Pressable>
 
-          <Text style={styles.pie}>
-            RMADG1 · telemetría en tiempo real con Supabase
-          </Text>
+          <Text style={styles.pie}>RMADG1 · Supabase · {ultimaHora}</Text>
         </ScrollView>
       </SafeAreaView>
 
@@ -215,7 +196,10 @@ export function DashboardScreen() {
             ]}
           />
           <View pointerEvents="none" style={styles.bandaAlerta}>
-            <Text style={styles.bandaTexto}>⚠  GAS DETECTADO · robot detenido</Text>
+            <View style={styles.bandaContenido}>
+            <Icon nombre="alerta" size={20} color="#FFFFFF" />
+            <Text style={styles.bandaTexto}>GAS DETECTADO · robot detenido</Text>
+          </View>
           </View>
         </>
       )}
@@ -223,20 +207,22 @@ export function DashboardScreen() {
   );
 }
 
-function Tarjeta({
+function Seccion({
   titulo,
-  sub,
+  meta,
   children,
 }: {
   titulo: string;
-  sub?: string;
+  meta?: string;
   children: React.ReactNode;
 }) {
   return (
-    <View style={styles.tarjeta}>
-      <Text style={styles.tarjetaTitulo}>{titulo}</Text>
-      {!!sub && <Text style={styles.tarjetaSub}>{sub}</Text>}
-      <View style={styles.tarjetaCuerpo}>{children}</View>
+    <View style={styles.seccion}>
+      <View style={styles.seccionHeader}>
+        <Text style={styles.seccionTitulo}>{titulo}</Text>
+        {!!meta && <Text style={styles.seccionMeta}>{meta}</Text>}
+      </View>
+      {children}
     </View>
   );
 }
@@ -248,7 +234,6 @@ function Metrica({ etiqueta, valor }: { etiqueta: string; valor: number }) {
     <View style={styles.metrica}>
       <Text style={styles.metricaEtiqueta}>{etiqueta}</Text>
       <Text style={styles.metricaValor}>{activo ? valor.toFixed(0) : '—'}</Text>
-      <Text style={styles.metricaUnidad}>{activo ? 'cm' : 'sin eco'}</Text>
       <View style={styles.metricaPista}>
         <View style={[styles.metricaBarra, { width: `${pct}%` }]} />
       </View>
@@ -256,34 +241,11 @@ function Metrica({ etiqueta, valor }: { etiqueta: string; valor: number }) {
   );
 }
 
-function Fila({ etiqueta, valor }: { etiqueta: string; valor: string }) {
+function Dato({ etiqueta, valor }: { etiqueta: string; valor: string }) {
   return (
-    <View style={styles.fila}>
-      <Text style={styles.filaEtiqueta}>{etiqueta}</Text>
-      <Text style={styles.filaValor}>{valor}</Text>
-    </View>
-  );
-}
-
-function Banner({
-  tono,
-  texto,
-  accion,
-  onAccion,
-}: {
-  tono: 'aviso' | 'info';
-  texto: string;
-  accion?: string;
-  onAccion?: () => void;
-}) {
-  return (
-    <View style={[styles.banner, tono === 'aviso' ? styles.bannerAviso : styles.bannerInfo]}>
-      <Text style={styles.bannerTexto}>{texto}</Text>
-      {!!accion && !!onAccion && (
-        <Pressable onPress={onAccion} accessibilityRole="button">
-          <Text style={styles.bannerAccion}>{accion}</Text>
-        </Pressable>
-      )}
+    <View style={styles.dato}>
+      <Text style={styles.datoEtiqueta}>{etiqueta}</Text>
+      <Text style={styles.datoValor}>{valor}</Text>
     </View>
   );
 }
@@ -298,11 +260,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.background },
   safe: { flex: 1 },
   scroll: { flex: 1 },
-  content: {
-    padding: space.lg,
-    paddingBottom: space.xxl,
-    alignItems: 'center',
-  },
+  content: { padding: space.lg, paddingBottom: space.xxl },
   brillo: { backgroundColor: colors.danger },
   bandaAlerta: {
     position: 'absolute',
@@ -314,26 +272,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.lg,
     alignItems: 'center',
   },
+  bandaContenido: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   bandaTexto: {
     color: '#FFFFFF',
     fontWeight: '800',
     fontSize: font.lg,
     letterSpacing: 0.4,
-    textAlign: 'center',
   },
   header: {
-    width: '100%',
-    maxWidth: 760,
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.md,
-    marginBottom: space.lg,
+    paddingBottom: space.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
   },
   headerTexto: { flex: 1 },
   marca: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
+    width: 44,
+    height: 44,
+    borderRadius: 12,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
@@ -341,129 +299,73 @@ const styles = StyleSheet.create({
   marcaTexto: { color: '#FFFFFF', fontWeight: '800', fontSize: font.lg },
   titulo: { fontSize: font.xxl, fontWeight: '800', color: colors.text, lineHeight: 32 },
   subtitulo: { fontSize: font.sm, color: colors.textMuted, marginTop: 2 },
-  estado: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: radius.pill,
-  },
-  estadoOk: { backgroundColor: colors.successSoft },
-  estadoOff: { backgroundColor: colors.warningSoft },
-  estadoOkTexto: { color: colors.success },
-  estadoOffTexto: { color: colors.warning },
+  estado: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   punto: { width: 8, height: 8, borderRadius: 4 },
-  estadoTexto: { fontSize: font.sm, fontWeight: '700' },
-  banner: {
-    width: '100%',
-    maxWidth: 760,
+  estadoTexto: { fontSize: font.sm, color: colors.textSecondary, fontWeight: '700' },
+  error: { color: colors.danger, fontSize: font.sm, marginTop: space.sm },
+  aviso: { color: colors.warning, fontSize: font.sm, marginTop: space.sm },
+  avisoInfo: { color: colors.primary, fontSize: font.sm, marginTop: space.sm },
+  seccion: { marginTop: space.xl },
+  seccionHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    padding: space.md,
-    borderRadius: radius.md,
-    marginBottom: space.md,
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    paddingBottom: space.sm,
   },
-  bannerAviso: { backgroundColor: colors.warningSoft },
-  bannerInfo: { backgroundColor: colors.primarySoft },
-  bannerNeutro: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
-  bannerTexto: { flex: 1, fontSize: font.md, color: colors.textSecondary },
-  bannerAccion: { color: colors.primary, fontWeight: '800', fontSize: font.md },
-  cargando: {
-    width: '100%',
-    maxWidth: 760,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    padding: space.lg,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginBottom: space.md,
-  },
-  cargandoTexto: { color: colors.textMuted, fontSize: font.md },
-  tarjeta: {
-    width: '100%',
-    maxWidth: 760,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: space.lg,
-    marginBottom: space.md,
-  },
-  tarjetaTitulo: { fontSize: font.lg, fontWeight: '800', color: colors.text },
-  tarjetaSub: { fontSize: font.sm, color: colors.textMuted, marginTop: 2 },
-  tarjetaCuerpo: { marginTop: space.md, alignItems: 'center' },
-  pista: {
+  seccionTitulo: {
     fontSize: font.sm,
-    color: colors.textMuted,
-    textAlign: 'center',
-    marginTop: space.sm,
+    fontWeight: '800',
+    color: colors.textSecondary,
+    letterSpacing: 1,
   },
-  metricas: { flexDirection: 'row', gap: space.sm, width: '100%' },
-  metrica: {
-    flex: 1,
-    backgroundColor: colors.surfaceSoft,
-    borderRadius: radius.md,
-    padding: space.md,
-    alignItems: 'center',
-  },
-  metricaEtiqueta: { fontSize: font.sm, color: colors.textMuted, fontWeight: '700' },
-  metricaValor: { fontSize: 26, fontWeight: '800', color: colors.text, marginTop: 4 },
-  metricaUnidad: { fontSize: font.xs, color: colors.textMuted },
+  seccionMeta: { fontSize: font.xs, color: colors.textMuted },
+  pista: { fontSize: font.xs, color: colors.textMuted, marginTop: space.sm },
+  metricas: { flexDirection: 'row', gap: space.lg },
+  metrica: { flex: 1 },
+  metricaEtiqueta: { fontSize: font.xs, color: colors.textMuted, fontWeight: '700' },
+  metricaValor: { fontSize: 30, fontWeight: '800', color: colors.text, marginTop: 2 },
   metricaPista: {
     height: 4,
-    width: '100%',
     borderRadius: 2,
     backgroundColor: colors.border,
     marginTop: space.sm,
-    overflow: 'hidden',
   },
   metricaBarra: { height: 4, borderRadius: 2, backgroundColor: colors.primary },
-  filas: { width: '100%' },
-  fila: {
+  filas: { flexDirection: 'row', gap: space.xl },
+  dato: { flex: 1 },
+  datoEtiqueta: { fontSize: font.xs, color: colors.textMuted, fontWeight: '700' },
+  datoValor: { fontSize: font.xl, fontWeight: '800', color: colors.text, marginTop: 2 },
+  controles: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: space.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    gap: space.md,
+    marginTop: space.xl,
   },
-  filaEtiqueta: { color: colors.textMuted, fontSize: font.md },
-  filaValor: { color: colors.text, fontWeight: '700', fontSize: font.md },
-  botones: { flexDirection: 'row', gap: space.sm, width: '100%' },
   boton: {
     flex: 1,
-    minHeight: 52,
+    minHeight: 54,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
   },
   botonIniciar: { backgroundColor: colors.primary },
   botonDetener: { backgroundColor: colors.text },
+  botonContenido: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   botonTexto: { color: '#FFFFFF', fontWeight: '800', fontSize: font.lg },
   botonSecundario: {
-    width: '100%',
-    minHeight: 48,
-    marginTop: space.sm,
-    borderRadius: radius.md,
+    minHeight: 44,
+    marginTop: space.md,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.surfaceSoft,
-    borderWidth: 1,
-    borderColor: colors.border,
   },
   botonSecundarioTexto: {
-    color: colors.textSecondary,
+    color: colors.textMuted,
     fontWeight: '700',
     fontSize: font.md,
   },
   pie: {
     color: colors.textMuted,
-    fontSize: font.sm,
+    fontSize: font.xs,
     textAlign: 'center',
-    marginTop: space.sm,
+    marginTop: space.xl,
   },
 });

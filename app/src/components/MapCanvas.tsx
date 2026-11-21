@@ -21,6 +21,10 @@ type Props = {
   resetKey?: number;
 };
 
+// Cuanto terreno se ve de ancho, en cm. Escala FIJA: el robot se queda en el
+// centro y el mapa se desplaza debajo. Nada de auto-zoom que comprima la ruta.
+const MUNDO_CM = 600;
+
 export function MapCanvas({
   trajectory,
   gasPoints,
@@ -36,30 +40,32 @@ export function MapCanvas({
   const ty = useSharedValue(0);
   const savedTy = useSharedValue(0);
 
-  // Encuadre automatico hasta que el usuario toca el mapa.
   const [autoVista, setAutoVista] = useState(true);
-  const escalaRef = useRef(1);
   const centroRef = useRef({ x: 0, y: 0 });
+  const iniciadoRef = useRef(false);
 
-  const soltarAuto = () => setAutoVista(false);
+  const recentrar = () => {
+    setAutoVista(true);
+    scale.value = withTiming(1);
+    tx.value = withTiming(0);
+    ty.value = withTiming(0);
+    savedScale.value = 1;
+    savedTx.value = 0;
+    savedTy.value = 0;
+  };
 
   useEffect(() => {
-    setAutoVista(true);
-    scale.value = 1;
-    savedScale.value = 1;
-    tx.value = 0;
-    savedTx.value = 0;
-    ty.value = 0;
-    savedTy.value = 0;
+    iniciadoRef.current = false;
+    recentrar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey]);
 
   const pinch = Gesture.Pinch()
     .onBegin(() => {
-      runOnJS(soltarAuto)();
+      runOnJS(setAutoVista)(false);
     })
     .onUpdate(e => {
-      scale.value = Math.min(Math.max(savedScale.value * e.scale, 0.5), 8);
+      scale.value = Math.min(Math.max(savedScale.value * e.scale, 0.4), 6);
     })
     .onEnd(() => {
       savedScale.value = scale.value;
@@ -67,7 +73,7 @@ export function MapCanvas({
 
   const pan = Gesture.Pan()
     .onBegin(() => {
-      runOnJS(soltarAuto)();
+      runOnJS(setAutoVista)(false);
     })
     .onUpdate(e => {
       tx.value = savedTx.value + e.translationX;
@@ -81,13 +87,7 @@ export function MapCanvas({
   const doubleTap = Gesture.Tap()
     .numberOfTaps(2)
     .onEnd(() => {
-      scale.value = withTiming(1);
-      tx.value = withTiming(0);
-      ty.value = withTiming(0);
-      savedScale.value = 1;
-      savedTx.value = 0;
-      savedTy.value = 0;
-      runOnJS(soltarAuto)();
+      runOnJS(recentrar)();
     });
 
   const gesture = Gesture.Simultaneous(pinch, pan, doubleTap);
@@ -100,53 +100,29 @@ export function MapCanvas({
     ],
   }));
 
-  const pts = [
-    ...trajectory,
-    ...gasPoints,
-    ...(robot ? [{ x: robot.x, y: robot.y }] : []),
-  ];
+  const baseScale = width / MUNDO_CM;
 
-  if (pts.length === 0) {
-    return (
-      <View style={[styles.empty, { width, height }]}>
-        <Text style={styles.emptyIcon}>🗺️</Text>
-        <Text style={styles.emptyTitle}>Mapa en espera</Text>
-        <Text style={styles.emptyText}>
-          Aparecerá la ruta del robot en cuanto llegue la primera lectura.
-        </Text>
-      </View>
-    );
+  if (robot) {
+    if (!iniciadoRef.current) {
+      centroRef.current = { x: robot.x, y: robot.y };
+      iniciadoRef.current = true;
+    } else if (autoVista) {
+      // Seguimiento suave: el robot no salta, el terreno se desplaza.
+      centroRef.current.x += (robot.x - centroRef.current.x) * 0.25;
+      centroRef.current.y += (robot.y - centroRef.current.y) * 0.25;
+    }
   }
 
-  const xs = pts.map(p => p.x);
-  const ys = pts.map(p => p.y);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-
-  const pad = 26;
-  // Ventana minima de 40 cm: con el robot quieto no se genera un zoom absurdo.
-  const sx = Math.max(maxX - minX, 40);
-  const sy = Math.max(maxY - minY, 40);
-  const baseAuto = Math.min((width - pad * 2) / sx, (height - pad * 2) / sy);
-
-  if (autoVista) {
-    escalaRef.current = baseAuto;
-    centroRef.current = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
-  }
-  const baseScale = escalaRef.current;
   const centroX = centroRef.current.x;
   const centroY = centroRef.current.y;
   const mapX = (x: number) => width / 2 + (x - centroX) * baseScale;
   const mapY = (y: number) => height / 2 - (y - centroY) * baseScale;
-  const arrow = 20;
+  const arrow = 18;
+
+  const sinDatos = trajectory.length === 0 && !robot && gasPoints.length === 0;
 
   return (
-    <View
-      style={[styles.wrapper, { width, height }]}
-      accessibilityLabel="Mapa de ruta del robot. Puntos rojos indican gas detectado."
-    >
+    <View style={[styles.wrapper, { width, height }]}>
       <GestureDetector gesture={gesture}>
         <Animated.View style={[{ width, height }, animatedStyle]}>
           <Svg width={width} height={height}>
@@ -159,7 +135,7 @@ export function MapCanvas({
                   y2={height}
                   stroke={colors.grid}
                   strokeWidth={1}
-                  strokeDasharray="4 6"
+                  strokeDasharray="3 7"
                 />
                 <Line
                   x1={0}
@@ -168,10 +144,38 @@ export function MapCanvas({
                   y2={height * f}
                   stroke={colors.grid}
                   strokeWidth={1}
-                  strokeDasharray="4 6"
+                  strokeDasharray="3 7"
                 />
               </G>
             ))}
+
+            {/* Rejilla de 1 m^2 centrada en el origen del mundo */}
+            <G>
+              {[0, 1, 2, 3].map(i => {
+                const gx = (i - 1.5) * 100;
+                const gy = (i - 1.5) * 100;
+                return (
+                  <G key={`m-${i}`}>
+                    <Line
+                      x1={mapX(gx)}
+                      y1={0}
+                      x2={mapX(gx)}
+                      y2={height}
+                      stroke={colors.grid}
+                      strokeWidth={1}
+                    />
+                    <Line
+                      x1={0}
+                      y1={mapY(gy)}
+                      x2={width}
+                      y2={mapY(gy)}
+                      stroke={colors.grid}
+                      strokeWidth={1}
+                    />
+                  </G>
+                );
+              })}
+            </G>
 
             {trajectory.length > 1 && (
               <Polyline
@@ -186,21 +190,15 @@ export function MapCanvas({
 
             {gasPoints.map((p, i) => (
               <G key={`gas-${i}`}>
-                <Circle cx={mapX(p.x)} cy={mapY(p.y)} r={9} fill={colors.danger} opacity={0.18} />
-                <Circle cx={mapX(p.x)} cy={mapY(p.y)} r={4} fill={colors.danger} />
+                <Circle cx={mapX(p.x)} cy={mapY(p.y)} r={10} fill={colors.danger} opacity={0.2} />
+                <Circle cx={mapX(p.x)} cy={mapY(p.y)} r={4.5} fill={colors.danger} />
               </G>
             ))}
 
             {robot && (
               <G>
-                <Circle
-                  cx={mapX(robot.x)}
-                  cy={mapY(robot.y)}
-                  r={11}
-                  fill={colors.primary}
-                  opacity={0.18}
-                />
-                <Circle cx={mapX(robot.x)} cy={mapY(robot.y)} r={6} fill={colors.primary} />
+                <Circle cx={mapX(robot.x)} cy={mapY(robot.y)} r={12} fill={colors.primary} opacity={0.18} />
+                <Circle cx={mapX(robot.x)} cy={mapY(robot.y)} r={6.5} fill={colors.primary} />
                 <Line
                   x1={mapX(robot.x)}
                   y1={mapY(robot.y)}
@@ -215,6 +213,12 @@ export function MapCanvas({
           </Svg>
         </Animated.View>
       </GestureDetector>
+
+      {sinDatos && (
+        <View style={styles.empty} pointerEvents="none">
+          <Text style={styles.emptyText}>Esperando la ruta del robot…</Text>
+        </View>
+      )}
 
       <View style={styles.leyenda} pointerEvents="none">
         <View style={styles.leyendaItem}>
@@ -237,41 +241,24 @@ export function MapCanvas({
 const styles = StyleSheet.create({
   wrapper: {
     overflow: 'hidden',
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
+    backgroundColor: colors.background,
   },
   empty: {
+    position: 'absolute',
+    top: 16,
+    left: 0,
+    right: 0,
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 24,
   },
-  emptyIcon: { fontSize: 34, marginBottom: 8 },
-  emptyTitle: { fontSize: 16, fontWeight: '700', color: colors.text },
-  emptyText: {
-    fontSize: 13,
-    color: colors.textMuted,
-    textAlign: 'center',
-    marginTop: 6,
-    lineHeight: 19,
-  },
+  emptyText: { color: colors.textMuted, fontSize: 13 },
   leyenda: {
     position: 'absolute',
-    left: 10,
-    bottom: 10,
+    left: 0,
+    bottom: 8,
     flexDirection: 'row',
-    gap: 12,
-    backgroundColor: 'rgba(255,255,255,0.92)',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
+    gap: 14,
   },
-  leyendaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  leyendaItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   muestra: { width: 8, height: 8, borderRadius: 4 },
-  leyendaTexto: { fontSize: 11, color: colors.textSecondary, fontWeight: '600' },
+  leyendaTexto: { fontSize: 11, color: colors.textMuted, fontWeight: '600' },
 });
