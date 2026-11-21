@@ -42,6 +42,8 @@ const int ENC_IZQ = 19, ENC_DER = 13;
 
 const uint8_t MPU_ADDR = 0x68;
 float gyroZ = 0.0f;
+float gyroBias = 0.0f;
+unsigned long tGyro = 0;
 
 /* ===================== AJUSTES ===================== */
 const int VEL_AVANCE = 190;
@@ -196,6 +198,7 @@ void girar(int grados) {
   }
   parar();
   delay(40);
+  tGyro = millis();
   theta += grados * DEG_TO_RAD;
   while (theta >  PI) theta -= 2 * PI;
   while (theta < -PI) theta += 2 * PI;
@@ -447,9 +450,17 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENC_DER), isrEncDer, RISING);
 
   initMPU();
-  if (leerGyroZ()) Serial.println("MPU OK");
-  else Serial.println("MPU: no responde (giros por tiempo)");
+  // Cero del giroscopio: 0.3 s quieto para quitar la deriva.
+  float suma = 0.0f; int nM = 0;
+  for (int i = 0; i < 40; i++) {
+    if (leerGyroZ()) { suma += gyroZ; nM++; }
+    delay(8);
+  }
+  gyroBias = (nM > 20) ? suma / nM : 0.0f;
+  if (nM > 20) Serial.println("MPU OK");
+  else Serial.println("MPU: no responde");
   tOdo = millis();
+  tGyro = millis();
 
   conectarWiFi();
   descartarComandosViejos();
@@ -499,12 +510,23 @@ void loop() {
       if (corr < -30) corr = -30;
       motores(VEL_AVANCE + corr, VEL_AVANCE - corr);
 
-      // Odometria por tiempo: el mapa sigue al robot aunque los encoders
-      // no reporten (son solo dos pulsos sueltos, no direccionales).
+      // Rumbo real del MPU: con la correccion el robot curvea, y theta
+      // debe seguirlo para que el mapa no salga en linea recta.
+      if (leerGyroZ()) {
+        unsigned long ahora = millis();
+        float dtg = (ahora - tGyro) / 1000.0f;
+        tGyro = ahora;
+        if (dtg > 0.0f && dtg < 0.3f) theta += (gyroZ - gyroBias) * dtg;
+      }
+      while (theta >  PI) theta -= 2 * PI;
+      while (theta < -PI) theta += 2 * PI;
+
+      // Odometria por tiempo. x/y estan en METROS (la telemetria los
+      // multiplica por 100 para enviar cm).
       float dt = (millis() - tOdo) / 1000.0f;
       tOdo = millis();
       if (dt > 0.0f && dt < 0.3f) {
-        float paso = CM_POR_SEG * dt;
+        float paso = (CM_POR_SEG / 100.0f) * dt;
         x += paso * cos(theta);
         y += paso * sin(theta);
       }
