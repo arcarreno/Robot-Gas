@@ -444,18 +444,20 @@ void descartarComandosViejos() {
   http.end();
 }
 
-void tareaNube() {
-  if (WiFi.status() != WL_CONNECTED) {
-    static unsigned long tRe = 0;
-    if (millis() - tRe > 30000UL) { tRe = millis(); WiFi.reconnect(); }
-    return;
+/* La red corre en su propia tarea (nucleo 0). Asi el POST/GET no bloquea
+   el loop de movimiento: telemetria y comandos cada 1 s de verdad. */
+void tareaNube(void *param) {
+  (void)param;
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    if (WiFi.status() != WL_CONNECTED) {
+      static unsigned long tRe = 0;
+      if (millis() - tRe > 30000UL) { tRe = millis(); WiFi.reconnect(); }
+      continue;
+    }
+    enviarTelemetria();
+    revisarComandos();
   }
-
-  // El PWM es hardware: NO hay que parar los motores para enviar HTTP.
-  // Pararlos aqui era lo que hacia que avanzara 1 s y se detuviera 3 s.
-  // Solo se espacia el HTTP para que no bloquee el loop cada 2 s.
-  if (millis() - tTelemetria > 5000UL) enviarTelemetria();
-  else if (millis() - tComandos > 5000UL) revisarComandos();
 }
 
 /* ===================== SETUP / LOOP ===================== */
@@ -501,6 +503,7 @@ void setup() {
 
   conectarWiFi();
   descartarComandosViejos();
+  xTaskCreatePinnedToCore(tareaNube, "nube", 8192, NULL, 1, NULL, 0);
 
   dFrente = medirFrente();
   tTelemetria = 0;
@@ -589,6 +592,5 @@ void loop() {
     }
   }
 
-  tareaNube();
   delay(15);
 }
