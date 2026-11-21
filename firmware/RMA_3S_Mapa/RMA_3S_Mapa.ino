@@ -13,6 +13,7 @@
 #include <WiFiMulti.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <Wire.h>
 #include "esp_system.h"
 
 #if __has_include("secrets.h")
@@ -39,13 +40,16 @@ const int MQ2_DO = 23, MQ2_AO = 36;
 const int LED    = 2;
 const int ENC_IZQ = 19, ENC_DER = 13;
 
+const uint8_t MPU_ADDR = 0x68;
+float gyroZ = 0.0f;
+
 /* ===================== AJUSTES ===================== */
 const int VEL_AVANCE = 190;
 const int VEL_GIRO   = 170;
 const float DIST_OBSTACULO = 50.0f;
 const float DIST_LIBRE     = 300.0f;
-// Ms que tarda un giro de 45 grados. Ajustar aqui si gira de mas o de menos.
-const unsigned long MS_POR_GRADO = 14;
+// Velocidad estimada de avance para la odometria del mapa (cm/s a PWM 190).
+const float CM_POR_SEG = 25.0f;
 
 // Si al avanzar el robot gira en circulos en vez de ir recto, cambia UNO a -1.
 const int SENTIDO_IZQ = 1;
@@ -70,8 +74,30 @@ volatile long encIzq = 0, encDer = 0;
 long prevIzq = 0, prevDer = 0;
 float x = 0.0f, y = 0.0f;
 
-unsigned long tTelemetria = 0, tComandos = 0;
+unsigned long tTelemetria = 0, tComandos = 0, tOdo = 0;
 int resetReason = 0;
+
+/* ===================== GIROSCOPIO ===================== */
+void initMPU() {
+  Wire.begin();
+  Wire.setTimeOut(100);
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x6B); Wire.write(0x00);      // despertar
+  Wire.endTransmission(true);
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x1B); Wire.write(0x08);      // +-500 dps
+  Wire.endTransmission(true);
+}
+
+bool leerGyroZ() {
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x47);                        // GYRO_ZOUT_H
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom((uint8_t)MPU_ADDR, (uint8_t)2) != 2) return false;
+  int16_t raw = (Wire.read() << 8) | Wire.read();
+  gyroZ = (raw / 65.5f) * DEG_TO_RAD;
+  return true;
+}
 
 /* ===================== MOTORES ===================== */
 void motores(int izq, int der) {
@@ -143,57 +169,71 @@ void leerGas() {
 /* ===================== MOVIMIENTO ===================== */
 void atenderSerial();
 
-/* Gira grados en el sitio. Positivo = izquierda. */
+/* Gira grados en el sitio. Se detiene cuando el MPU marca el angulo,
+   no por tiempo fijo: ni se pasa ni se queda corto. */
 void girar(int grados) {
-  if (grados == 0) return;
-  unsigned long ms = (unsigned long)(abs(grados) * MS_POR_GRADO);
+  if (abs(grados) < 5) return;
+  float objetivo = abs(grados) * DEG_TO_RAD;
+  float acum = 0.0f;
+  unsigned long t0 = millis(), tp = t0;
+  unsigned long tope = abs(grados) * 22UL + 800UL;   // tope de seguridad
 
   if (grados > 0) motores(-VEL_GIRO, VEL_GIRO);
   else            motores( VEL_GIRO, -VEL_GIRO);
 
-  unsigned long t0 = millis();
-  while (millis() - t0 < ms) {
+  while (millis() - t0 < tope) {
+    if (leerGyroZ()) {
+      unsigned long ahora = millis();
+      acum += gyroZ * (ahora - tp) / 1000.0f;
+      tp = ahora;
+    }
+    if (fabs(acum) >= objetivo) break;
     atenderSerial();
     leerGas();
     if (gas && gasCorte) break;
     if (!moviendo) break;
-    delay(8);
+    delay(5);
   }
   parar();
-  delay(120);
+  delay(40);
   theta += grados * DEG_TO_RAD;
   while (theta >  PI) theta -= 2 * PI;
   while (theta < -PI) theta += 2 * PI;
 }
 
-/* Barrido de 360 en 8 pasos de 45 y salida por el mejor rumbo. */
+/* Evasion rapida: el frente esta tapado, se elige el LADO MAS DESPEJADO
+   con los sensores izquierdo y derecho que ya estan montados. Solo si los
+   dos lados estan tapados se hace el barrido completo de 8 pasos. */
 void esquivar() {
   parar();
-  delay(150);
 
+  float li = (dIzq > 0.0f) ? dIzq : DIST_LIBRE;
+  float de = (dDer > 0.0f) ? dDer : DIST_LIBRE;
+
+  if (li > 70.0f || de > 70.0f) {
+    if (li > de + 10.0f)      girar(90);
+    else if (de > li + 10.0f) girar(-90);
+    else if (li > 70.0f)      girar(90);
+    else                      girar(-90);
+    Serial.printf("Giro lateral: izq %.0f der %.0f\n", li, de);
+    return;
+  }
+
+  // Los dos lados tambien tapados: barrido corto de 8 pasos de 45.
+  Serial.println("Barrido 360");
   float mejorDist = medirFrente();
   int mejorPaso = 0;
-
   for (int i = 1; i <= 8; i++) {
     girar(45);
     if (!moviendo || (gas && gasCorte)) return;
-    delay(80);
     float d = medirFrente();
-    if (d > mejorDist) {
-      mejorDist = d;
-      mejorPaso = i;
-    }
+    if (d > mejorDist) { mejorDist = d; mejorPaso = i; }
   }
-
   int giro = mejorPaso * 45;
   if (giro > 180) giro -= 360;
   if (mejorDist < 30.0f) girar(180);
   else if (giro != 0) girar(giro);
-
   Serial.printf("Evasion: mejor %.0f cm, paso %d\n", mejorDist, mejorPaso);
-
-  prevIzq = encIzq;
-  prevDer = encDer;
 }
 
 void actualizarLED() {
@@ -406,6 +446,11 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENC_IZQ), isrEncIzq, RISING);
   attachInterrupt(digitalPinToInterrupt(ENC_DER), isrEncDer, RISING);
 
+  initMPU();
+  if (leerGyroZ()) Serial.println("MPU OK");
+  else Serial.println("MPU: no responde (giros por tiempo)");
+  tOdo = millis();
+
   conectarWiFi();
   descartarComandosViejos();
 
@@ -443,8 +488,26 @@ void loop() {
     if (digitalRead(BTN_F) == LOW || (dFrente > 0.0f && dFrente < DIST_OBSTACULO)) {
       Serial.printf("Obstaculo a %.0f cm\n", dFrente);
       esquivar();
+      tOdo = millis();
     } else {
-      motores(VEL_AVANCE, VEL_AVANCE);   // AVANZAR, sin correcciones
+      // Avance con correccion suave: si un lado esta mas cerca, girar un
+      // poco hacia el otro lado para no pegarse a la pared.
+      float li = (dIzq > 0.0f) ? dIzq : DIST_LIBRE;
+      float de = (dDer > 0.0f) ? dDer : DIST_LIBRE;
+      int corr = (int)((de - li) * 0.25f);
+      if (corr > 30) corr = 30;
+      if (corr < -30) corr = -30;
+      motores(VEL_AVANCE + corr, VEL_AVANCE - corr);
+
+      // Odometria por tiempo: el mapa sigue al robot aunque los encoders
+      // no reporten (son solo dos pulsos sueltos, no direccionales).
+      float dt = (millis() - tOdo) / 1000.0f;
+      tOdo = millis();
+      if (dt > 0.0f && dt < 0.3f) {
+        float paso = CM_POR_SEG * dt;
+        x += paso * cos(theta);
+        y += paso * sin(theta);
+      }
     }
   } else {
     parar();
