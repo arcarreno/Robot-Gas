@@ -20,6 +20,7 @@ import { colors, font, radius, space } from '../theme';
 export function DashboardScreen() {
   const { width } = useWindowDimensions();
   const [aviso, setAviso] = useState<string | null>(null);
+  const [centroKey, setCentroKey] = useState(0);
   const {
     data,
     trajectory,
@@ -117,7 +118,7 @@ export function DashboardScreen() {
               robot={data ? data.pose : null}
               width={anchoMapa}
               height={320}
-              resetKey={resetContador}
+              resetKey={resetContador + centroKey}
             />
             <Text style={styles.pista}>
               Pellizca · arrastra · doble toque para centrar
@@ -167,14 +168,26 @@ export function DashboardScreen() {
               </View>
             </Pressable>
           </View>
-          <Pressable
-            style={styles.botonSecundario}
-            onPress={reiniciarMapa}
-            accessibilityRole="button"
-            accessibilityLabel="Limpiar el mapa"
-          >
-            <Text style={styles.botonSecundarioTexto}>Limpiar mapa</Text>
-          </Pressable>
+          <View style={styles.acciones}>
+            <Pressable
+              style={styles.botonSecundario}
+              onPress={() => setCentroKey(n => n + 1)}
+              accessibilityRole="button"
+              accessibilityLabel="Centrar el mapa en el robot"
+            >
+              <Icon nombre="robot" size={16} color={colors.textSecondary} />
+              <Text style={styles.botonSecundarioTexto}>Centrar</Text>
+            </Pressable>
+            <Pressable
+              style={styles.botonSecundario}
+              onPress={reiniciarMapa}
+              accessibilityRole="button"
+              accessibilityLabel="Limpiar el mapa"
+            >
+              <Icon nombre="limpiar" size={16} color={colors.textSecondary} />
+              <Text style={styles.botonSecundarioTexto}>Limpiar mapa</Text>
+            </Pressable>
+          </View>
 
           <Text style={styles.pie}>RMADG1 · Supabase · {ultimaHora}</Text>
         </ScrollView>
@@ -351,9 +364,12 @@ const styles = StyleSheet.create({
   botonDetener: { backgroundColor: colors.text },
   botonContenido: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   botonTexto: { color: '#FFFFFF', fontWeight: '800', fontSize: font.lg },
+  acciones: { flexDirection: 'row', gap: space.md, marginTop: space.md },
   botonSecundario: {
+    flex: 1,
     minHeight: 44,
-    marginTop: space.md,
+    flexDirection: 'row',
+    gap: space.sm,
     alignItems: 'center',
     justifyContent: 'center',
   },

@@ -21,9 +21,23 @@ type Props = {
   resetKey?: number;
 };
 
-// Cuanto terreno se ve de ancho, en cm. Escala FIJA: el robot se queda en el
-// centro y el mapa se desplaza debajo. Nada de auto-zoom que comprima la ruta.
 const MUNDO_CM = 600;
+const PAD = 28;
+const SCALE_MIN = 0.02; // px por cm: nunca se aleja mas de esto
+
+type Bounds = { minX: number; maxX: number; minY: number; maxY: number };
+
+function calcularBounds(pts: Punto[]): Bounds | null {
+  if (pts.length === 0) return null;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return { minX, maxX, minY, maxY };
+}
 
 export function MapCanvas({
   trajectory,
@@ -42,7 +56,7 @@ export function MapCanvas({
 
   const [autoVista, setAutoVista] = useState(true);
   const centroRef = useRef({ x: 0, y: 0 });
-  const iniciadoRef = useRef(false);
+  const autoScaleRef = useRef(width / MUNDO_CM);
 
   const recentrar = () => {
     setAutoVista(true);
@@ -55,7 +69,8 @@ export function MapCanvas({
   };
 
   useEffect(() => {
-    iniciadoRef.current = false;
+    autoScaleRef.current = width / MUNDO_CM;
+    centroRef.current = robot ? { x: robot.x, y: robot.y } : { x: 0, y: 0 };
     recentrar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey]);
@@ -100,26 +115,46 @@ export function MapCanvas({
     ],
   }));
 
-  const baseScale = width / MUNDO_CM;
+  const todosPts: Punto[] = [
+    ...trajectory,
+    ...gasPoints,
+    ...(robot ? [{ x: robot.x, y: robot.y }] : []),
+  ];
+  const bounds = calcularBounds(todosPts);
 
-  if (robot) {
-    if (!iniciadoRef.current) {
-      centroRef.current = { x: robot.x, y: robot.y };
-      iniciadoRef.current = true;
-    } else if (autoVista) {
-      // Seguimiento suave: el robot no salta, el terreno se desplaza.
-      centroRef.current.x += (robot.x - centroRef.current.x) * 0.25;
-      centroRef.current.y += (robot.y - centroRef.current.y) * 0.25;
+  if (autoVista && bounds) {
+    const centroObjetivo = {
+      x: (bounds.minX + bounds.maxX) / 2,
+      y: (bounds.minY + bounds.maxY) / 2,
+    };
+    // Seguimiento suave. Al calcular la escala se incluye el desfase del
+    // centro para que nada quede fuera aunque el robot se mueva rapido.
+    centroRef.current.x += (centroObjetivo.x - centroRef.current.x) * 0.4;
+    centroRef.current.y += (centroObjetivo.y - centroRef.current.y) * 0.4;
+    const desfaseX = Math.abs(centroRef.current.x - centroObjetivo.x);
+    const desfaseY = Math.abs(centroRef.current.y - centroObjetivo.y);
+
+    const spanX = Math.max(bounds.maxX - bounds.minX, 40) + 2 * desfaseX;
+    const spanY = Math.max(bounds.maxY - bounds.minY, 40) + 2 * desfaseY;
+    const deseada = Math.min(
+      (width - PAD * 2) / spanX,
+      (height - PAD * 2) / spanY,
+    );
+    // NUNCA se acerca: asi la ruta trazada no se comprime ni "desaparece"
+    // cuando el robot vuelve a una zona ya visitada.
+    if (deseada > SCALE_MIN && deseada < autoScaleRef.current) {
+      autoScaleRef.current = deseada;
     }
   }
 
+  const baseScale = autoScaleRef.current;
   const centroX = centroRef.current.x;
   const centroY = centroRef.current.y;
   const mapX = (x: number) => width / 2 + (x - centroX) * baseScale;
   const mapY = (y: number) => height / 2 - (y - centroY) * baseScale;
   const arrow = 18;
 
-  const sinDatos = trajectory.length === 0 && !robot && gasPoints.length === 0;
+  const sinDatos = todosPts.length === 0;
 
   return (
     <View style={[styles.wrapper, { width, height }]}>
@@ -149,7 +184,6 @@ export function MapCanvas({
               </G>
             ))}
 
-            {/* Rejilla de 1 m^2 centrada en el origen del mundo */}
             <G>
               {[0, 1, 2, 3].map(i => {
                 const gx = (i - 1.5) * 100;
