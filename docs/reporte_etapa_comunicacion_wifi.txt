@@ -428,41 +428,47 @@ incondicional.
 \textbf{\large Referencias}
 
 {\fontsize{10}{12}\selectfont
-\begin{enumerate}
+\begin{list}{[$\arabic{enumi}$]}{%
+  \usecounter{enumi}
+  \setlength{\leftmargin}{1.1cm}
+  \setlength{\itemindent}{0pt}
+  \setlength{\labelsep}{0.4cm}
+  \setlength{\itemsep}{3pt}
+  \setlength{\parsep}{0pt}
+}
   \item Espressif Systems, ``ESP32 Technical Reference Manual,'' 2024.
-        Documento público disponible en:
-        \url{https://www.espressif.com/en/support/documents/technical-documents}
+        Disponible: \url{https://www.espressif.com/en/support/documents/technical-documents}
   \item R. Siegwart, I. R. Nourbakhsh y D. Scaramuzza,
         \textit{Introduction to Autonomous Mobile Robots}, 2nd ed.
-        Cambridge, MA: MIT Press, 2011. Consulta pública en:
+        Cambridge, MA: MIT Press, 2011. Disponible:
         \url{https://books.google.com/books?id=4of6AQAAQBAJ}
   \item Espressif Systems, ``ESP-IDF Programming Guide,'' 2024.
-        Disponible públicamente en: \url{https://docs.espressif.com/projects/esp-idf/}
-  \item Espressif Systems, ``arduino-esp32: Arduino core for ESP32,'' repositorio
-        público, 2024. Disponible en: \url{https://github.com/espressif/arduino-esp32}
-  \item Supabase, ``Supabase Documentation: Database, REST and Realtime,'' 2024.
-        Disponible públicamente en: \url{https://supabase.com/docs}
+        Disponible: \url{https://docs.espressif.com/projects/esp-idf/}
+  \item Espressif Systems, ``arduino-esp32: Arduino core for ESP32,''
+        repositorio público, 2024. Disponible:
+        \url{https://github.com/espressif/arduino-esp32}
+  \item Supabase, ``Supabase Documentation: Database, REST and Realtime,''
+        2024. Disponible: \url{https://supabase.com/docs}
   \item React Native, ``React Native Documentation,'' 2024.
-        Disponible públicamente en: \url{https://reactnative.dev/docs/getting-started}
+        Disponible: \url{https://reactnative.dev/docs/getting-started}
   \item Software Mansion, ``React Native SVG: documentación y repositorio,''
-        2024. Disponible en: \url{https://github.com/software-mansion/react-native-svg}
+        2024. Disponible: \url{https://github.com/software-mansion/react-native-svg}
   \item Arduino, ``Arduino CLI Documentation,'' 2024.
-        Disponible públicamente en: \url{https://arduino.github.io/arduino-cli/}
+        Disponible: \url{https://arduino.github.io/arduino-cli/}
   \item TDK InvenSense, ``MPU-6050 Product Specification,'' 2013.
-        Disponible públicamente en:
-        \url{https://invensense.tdk.com/products/motion-tracking/6-axis/mpu-6050/}
-  \item Hanwei Electronics, ``MQ-2 Gas Sensor Datasheet.'' Disponible
-        públicamente en: \url{https://www.hwsensor.com/}
-  \item Elecfreaks, ``HC-SR04 Ultrasonic Module Datasheet.'' Disponible
-        públicamente en: \url{https://www.elecfreaks.com/}
+        Disponible: \url{https://invensense.tdk.com/products/motion-tracking/6-axis/mpu-6050/}
+  \item Hanwei Electronics, ``MQ-2 Gas Sensor Datasheet.''
+        Disponible: \url{https://www.hwsensor.com/}
+  \item Elecfreaks, ``HC-SR04 Ultrasonic Module Datasheet.''
+        Disponible: \url{https://www.elecfreaks.com/}
   \item FreeRTOS, ``FreeRTOS Documentation,'' 2024.
-        Disponible públicamente en: \url{https://www.freertos.org/}
+        Disponible: \url{https://www.freertos.org/}
   \item TypeScript, ``TypeScript Documentation,'' 2024.
-        Disponible públicamente en: \url{https://www.typescriptlang.org/docs/}
+        Disponible: \url{https://www.typescriptlang.org/docs/}
   \item A. Carreño González, ``Robot-Gas: firmware, aplicación móvil y
         navegación autónoma de un vehículo terrestre,'' repositorio público,
-        2026. Disponible en: \url{https://github.com/arcarreno/Robot-Gas}
-\end{enumerate}
+        2026. Disponible: \url{https://github.com/arcarreno/Robot-Gas}
+\end{list}
 }
 
 \end{document}
