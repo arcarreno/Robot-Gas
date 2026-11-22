@@ -72,7 +72,7 @@
 {\fontsize{10}{12}\selectfont Angel Armando Carreño González$^{1}$, Mtra. Alba Maribel Sánchez Gálvez$^{2}$}
 
 \vspace{-0.2cm}
-{\fontsize{10}{12}\selectfont Facultad de Ciencias de la Computación$^{1}$, Facultad de Ciencias de la Electrónica$^{2}$}
+{\fontsize{10}{12}\selectfont Facultad de Ciencias de la Computación$^{1}$, Facultad de Ciencias de la Computación$^{2}$}
 
 \vspace{-0.2cm}
 {\fontsize{10}{12}\selectfont \textbf{Resumen}}
@@ -419,8 +419,8 @@ tipos de obstáculos.
 
 Agradezco a la Mtra. Alba Maribel Sánchez Gálvez y al Mtro. Ricardo Álvarez
 González por su orientación y apoyo durante el desarrollo de este proyecto.
-A la Facultad de Ciencias de la Computación y a la Facultad de Ciencias de la
-Electrónica de la BUAP por las instalaciones y recursos utilizados, y al
+A la Facultad de Ciencias de la Computación de la BUAP por las instalaciones y
+recursos utilizados, y al
 programa Haciendo Ciencia en la BUAP por la oportunidad de realizar esta
 investigación. A mi familia por su apoyo incondicional.
 
@@ -438,9 +438,9 @@ investigación. A mi familia por su apoyo incondicional.
   \setlength{\itemsep}{3pt}
   \setlength{\parsep}{0pt}
 }
-  \item K. Lynch y F. Ross, \textit{Modern Robotics: Mechanics, Planning, and
-        Control}, libro de acceso gratuito, 2017. Disponible:
-        \url{http://modernrobotics.org}
+  \item K. Lynch y F. Park, \textit{Modern Robotics: Mechanics, Planning, and
+        Control}, libro de acceso gratuito, 2017. Preprint PDF público:
+        \url{https://hades.mech.northwestern.edu/images/2/25/MR-v2.pdf}
   \item Espressif Systems, ``ESP32 Technical Reference Manual,'' 2024.
         Disponible: \url{https://www.espressif.com/en/support/documents/technical-documents}
   \item Espressif Systems, ``ESP-IDF Programming Guide,'' 2024.
