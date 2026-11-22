@@ -1,0 +1,458 @@
+%% ============================================================================
+%% Reporte Final — Etapa de comunicación WiFi para un vehículo terrestre autónomo
+%% Formato: Artículo, una columna, Times New Roman (idéntico al reporte base)
+%% ============================================================================
+\documentclass[12pt,a4paper]{article}
+
+%% ---- Paquetes ----
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{times}
+\usepackage[spanish]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{url}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage{setspace}
+\usepackage{subcaption}
+\usepackage{float}
+
+%% ---- Márgenes: 2.5 cm todos ----
+\geometry{
+  left=2.5cm,
+  right=2.5cm,
+  top=2.5cm,
+  bottom=2.5cm
+}
+
+%% ---- Espaciado: sencillo y seguido ----
+\setstretch{1.0}
+\linespread{1.0}
+
+%% ---- Sin sangría después de punto y aparte ----
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+
+%% ---- Numeración centrada abajo ----
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+%% ---- Configuración de Listings ----
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{blue}\bfseries,
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{red},
+  breaklines=true,
+  frame=single,
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  captionpos=b
+}
+
+%% ============================================================================
+\begin{document}
+
+%% ============================================================================
+%% TÍTULO (14pt, centrado, mayúsculas y minúsculas)
+%% ============================================================================
+\begin{center}
+{\fontsize{14}{16}\selectfont \textbf{Etapa de comunicación WiFi para un vehículo terrestre autónomo}}
+
+\vspace{-0.3cm}
+{\fontsize{10}{12}\selectfont Angel Armando Carreño González, Tutor: Alba Maribel Sánchez Gálvez}
+
+\vspace{-0.2cm}
+{\fontsize{10}{12}\selectfont Facultad de Ciencias de la Computación}
+
+\vspace{-0.2cm}
+{\fontsize{10}{12}\selectfont \textbf{Resumen}}
+\end{center}
+
+{\fontsize{10}{12}\selectfont
+\begin{itshape}
+\hspace{2cm}\parbox{\dimexpr\linewidth-4cm}{%
+Este documento presenta el diseño e implementación de la etapa de comunicación
+inalámbrica para un vehículo terrestre autónomo con ruedas. El sistema integra
+un firmware embebido en ESP32, tres sensores ultrasónicos para la evasión de
+obstáculos, un sensor MQ-2 para la detección de gas y un módulo MPU6050 para la
+medición del rumbo. La telemetría se transmite a la plataforma Supabase mediante
+peticiones HTTPS y es consultada por una aplicación móvil Android desarrollada
+en React Native, que muestra el mapa de la ruta, las distancias, la posición y
+las alarmas de gas en tiempo real. El firmware emplea dos tareas independientes
+del sistema operativo FreeRTOS para separar el envío de telemetría de la
+recepción de comandos, reduciendo la latencia de actualización a aproximadamente
+un segundo. Se describen la arquitectura, la selección tecnológica, el
+algoritmo de navegación, el protocolo de comunicación, las pruebas de integración
+y los resultados obtenidos.
+}
+\end{itshape}
+}
+
+\vspace{0.3cm}
+
+%% ============================================================================
+%% INTRODUCCIÓN
+%% ============================================================================
+\textbf{\large Introducción}
+
+La robótica móvil autónoma ha experimentado un crecimiento significativo en las
+últimas décadas, impulsada por avances en microcontroladores de bajo costo,
+sensores y plataformas de internet de las cosas (IoT) [1]. Los vehículos
+terrestres con ruedas son ampliamente utilizados en aplicaciones de exploración,
+logística, vigilancia y en ambientes donde la presencia humana resulta onerosa
+o peligrosa.
+
+En este tipo de sistemas, la comunicación inalámbrica cumple un papel doble:
+por un lado permite enviar comandos de control desde una terminal remota y, por
+otro, permite que el vehículo reporte su estado y envíe mensajes de alerta [2].
+Una arquitectura típica está formada por tres componentes: el dispositivo
+embebido a bordo del robot, un servicio de backend en la nube y una interfaz de
+supervisión remota.
+
+El proyecto se plantea además la detección de gas como una condición de parada
+de seguridad, de modo que el vehículo interrumpa su marcha automáticamente al
+presentarse una concentración peligrosa y lo notifique a la aplicación móvil.
+La navegación se resuelve de forma reactiva con tres sensores ultrasónicos
+dispuestos al frente, a la izquierda y a la derecha, complementados con un
+giroscopio para medir el rumbo durante los giros.
+
+Los objetivos específicos del trabajo son:
+
+\begin{enumerate}
+  \item Armar un prototipo de robot diferencial con componentes comerciales.
+  \item Seleccionar una plataforma IoT de uso libre para la comunicación.
+  \item Integrar en el firmware la etapa de comunicación con la plataforma IoT.
+  \item Implementar la navegación autónoma con evasión de obstáculos y alarma de gas.
+  \item Desarrollar una aplicación móvil para el monitoreo y control remoto.
+  \item Realizar pruebas de funcionamiento y documentar los resultados.
+\end{enumerate}
+
+%% ============================================================================
+%% DESARROLLO
+%% ============================================================================
+\textbf{\large Desarrollo}
+
+\textbf{Arquitectura del Sistema}
+
+La arquitectura se organiza en cuatro capas: hardware, firmware, backend y
+frontend. La capa de hardware está constituida por un microcontrolador ESP32
+DevKit V1, un controlador de motores L298N, dos motores de corriente continua
+con reducción, tres sensores ultrasónicos HC--SR04, un sensor de gas MQ--2, un
+módulo giroscópico MPU6050 y un par de baterías 18650 con un regulador
+ reductor de 5 V. La alimentación de los motores y la lógica digital comparten
+una referencia de tierra común.
+
+La capa de firmware, escrita en C++ sobre el entorno Arduino, adquiere los
+sensores, decide el movimiento y publica la telemetría. La capa de backend
+corresponde a Supabase, que expone una API REST sobre PostgreSQL y provee
+suscripciones en tiempo real. La capa de frontend es una aplicación Android
+nativa construida con React Native y TypeScript.
+
+El flujo de información es bidireccional: el ESP32 envía lecturas a la tabla
+\texttt{lecturas\_robot} y consulta la tabla \texttt{comandos\_robot}; la
+aplicación inserta órdenes en esta última tabla y obtiene las lecturas
+recientes, ya sea por suscripción en tiempo real o por sondeo periódico.
+
+\begin{figure}[H]
+  \centering
+  \IfFileExists{imagen1.png}{%
+    \includegraphics[width=0.6\textwidth]{imagen1.png}%
+  }{%
+    \fbox{\parbox[t][6cm][c]{0.6\textwidth}{\centering \textbf{Espacio reservado para la Imagen 1}\\
+    Prototipo del robot con ESP32, L298N, sensores ultrasónicos y sensor MQ--2.}}%
+  }
+  \caption{Prototipo del vehículo terrestre autónomo y su etapa de comunicación.}
+  \label{fig:robot}
+\end{figure}
+
+\textbf{Stack Tecnológico}
+
+La siguiente tabla resume las tecnologías empleadas y la razón de su selección:
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Capa} & \textbf{Tecnología} & \textbf{Justificación} \\ \midrule
+Hardware & ESP32 DevKit V1 & WiFi integrado, bajo costo, 36\% de memoria de programa \\
+Driver & L298N dual H-bridge & Control PWM de dos motores con bajo costo \\
+Sensores & 3$\times$ HC--SR04, MQ--2, MPU6050 & Distancia, gas y rumbo con bajo consumo \\
+Firmware & Arduino CLI + C++ & Compilación reproducible y amplia comunidad \\
+SO embebido & FreeRTOS & Tareas separadas para red y movimiento \\
+Backend & Supabase (PostgreSQL) & REST, Realtime, RLS y capa gratuita \\
+Comunicación & HTTPS + JSON & Compatible con el cliente publishable de Supabase \\
+Frontend & React Native + TypeScript & Una sola base de código para Android \\
+Gráficos & React Native SVG & Mapa vectorial sin dependencias nativas \\ \bottomrule
+\end{tabular}
+\caption{Stack tecnológico del proyecto}
+\end{table}
+
+\textbf{Por qué fue la mejor decisión}
+
+La selección de cada componente se basó en un análisis de costo--beneficio
+adaptado a las restricciones del proyecto.
+
+\textbf{ESP32 versus Raspberry Pi}: el ESP32 integra WiFi y tiene un consumo
+energético reducido, lo que permite operación prolongada con baterías 18650.
+Además, dispone de suficientes pines para los tres ultrasónicos, el sensor de
+gas y el control de motores [3].
+
+\textbf{Supabase versus un servidor propio}: la plataforma provee una API REST
+lista para usar, autenticación mediante clave publishable, políticas de
+seguridad por fila y suscripciones en tiempo real sin necesidad de mantener
+infraestructura adicional [4].
+
+\textbf{Tres sensores ultrasónicos versus LiDAR}: los HC--SR04 son de bajo
+costo y suficientes para detectar obstáculos en interiores. Al disponer de
+mediciones frontal, izquierda y derecha es posible decidir el rumbo sin barrer
+el ambiente por completo en cada evento [5].
+
+\textbf{React Native versus desarrollo nativo}: permite construir la interfaz
+con una sola base de código y generar un APK para Android, con bibliotecas
+maduras para gestos y gráficos vectoriales [6].
+
+\textbf{JSON construido manualmente versus ArduinoJson}: dado que el número de
+campos es fijo y pequeño, la concatenación de cadenas evita el consumo de memoria
+dinámica que impone una biblioteca de serialización en un microcontrolador.
+
+\textbf{Sensores y adquisición de datos}
+
+Cada sensor ultrasónico se dispara con un pulso de 10 $\mu$s y se mide el
+tiempo de eco con \texttt{pulseIn}, con un tiempo de espera máximo de 18 ms.
+El tiempo se convierte a centímetros mediante la relación
+$d = t \cdot 0.0343/2$. Se toman tres muestras y se utiliza la mediana para
+reducir el efecto de ecos espurios. Un valor de cero se interpreta como
+``sin eco'', es decir, vía libre, y no como un obstáculo pegado al robot.
+
+El sensor MQ--2 se emplea en modo digital: la salida DO se conecta al GPIO 23
+con resistencia de pull--up interna. Experimentalmente se verificó que dicha
+salida permanece en nivel bajo con aire limpio y pasa a nivel alto en presencia
+de gas. Para evitar falsas alarmas originadas por transitorios de corriente al
+arrancar los motores, se aplica un filtro por mayoría sobre las últimas 24
+muestras: la alarma se activa cuando al menos 20 de ellas están en alto, lo que
+equivale a 1.2 segundos, y se libera cuando el sensor permanece limpio.
+
+El MPU6050 se comunica por $I^2C$ y se configura en una escala de
+$\pm 500$ grados por segundo. La integración de la velocidad angular permite
+detener un giro exactamente en el ángulo deseado y alimentar la odometría del
+mapa. El bias del giroscopio se estima con el robot detenido y se actualiza
+durante las esperas para evitar deriva.
+
+\textbf{Firmware y algoritmo de navegación}
+
+El firmware implementa un bucle principal que lee los sensores, actualiza el
+estado de los motores y verifica la alarma de gas. Cuando el frente está
+despejado, el robot avanza con ambos motores a la misma velocidad y aplica una
+corrección suave según la diferencia entre las distancias izquierda y derecha,
+de modo que no se arrastre contra una pared.
+
+Cuando el frente mide menos de 50 cm, se detiene y compara los sensores
+laterales. Si alguno de los lados está despejado, gira hacia ese lado y
+detiene el giro en cuanto el frente vuelve a estar libre. Solo si ambos lados
+están obstruidos se realiza un barrido completo de ocho pasos de 45 grados y
+se selecciona el rumbo con mayor distancia medida. Este esquema reduce el
+tiempo de evasión frente a un barrido realizado en cada obstáculo.
+
+El envío de telemetría y la recepción de comandos se ejecutan en dos tareas de
+FreeRTOS ubicadas en el núcleo 0, cada una con su propio cliente TLS. Esta
+separación evita que el handshake HTTPS bloquee el bucle de movimiento, que se
+ejecuta en el núcleo 1. Como resultado, la telemetría se publica cada
+aproximadamente 1.2 segundos y los comandos se reciben en menos de un
+segundo.
+
+Los comandos disponibles son \texttt{ini} y \texttt{alto} para iniciar y
+detener el movimiento, \texttt{ping} para verificar el enlace, \texttt{mq2}
+para consultar el sensor y \texttt{gason}/\texttt{gasoff} para habilitar o
+deshabilitar el corte por gas. Pueden enviarse por puerto serial o mediante la
+tabla \texttt{comandos\_robot} de Supabase.
+
+\textbf{Backend y protocolo de comunicación}
+
+La base de datos define dos tablas. La tabla \texttt{lecturas\_robot}
+almacena identificador, marca de tiempo, posición $x$ e $y$, rumbo $\theta$,
+distancias de los tres ultrasónicos, estado digital y analógico del sensor de
+gas, bandera de alarma, tiempo de funcionamiento y motivo de reinicio. La tabla
+\texttt{comandos\_robot} almacena identificador, destino, comando, estado de
+procesamiento y fecha de creación.
+
+Se habilitaron políticas de seguridad a nivel de fila para permitir lectura e
+inserción de registros y actualización de comandos. El firmware construye el
+cuerpo JSON manualmente y realiza un \texttt{POST} a la tabla de lecturas y un
+\texttt{GET} a la tabla de comandos, marcando como procesado el comando
+ejecutado mediante una petición \texttt{PATCH}.
+
+La aplicación consulta las últimas treinta lecturas una vez por segundo y
+procesa únicamente las filas nuevas en orden ascendente. Este sondeo de respaldo
+complementa la suscripción en tiempo real y garantiza que no se pierdan eventos
+de gas que duren una sola lectura.
+
+\begin{figure}[H]
+  \centering
+  \IfFileExists{imagen2.png}{%
+    \includegraphics[width=0.6\textwidth]{imagen2.png}%
+  }{%
+    \fbox{\parbox[t][6cm][c]{0.6\textwidth}{\centering \textbf{Espacio reservado para la Imagen 2}\\
+    Captura de la base de datos Supabase con lecturas y comandos del robot.}}%
+  }
+  \caption{Registro de telemetría y comandos en la plataforma Supabase.}
+  \label{fig:supabase}
+\end{figure}
+
+\textbf{Aplicación móvil}
+
+La aplicación, denominada RMADG1, se construyó con React Native y TypeScript
+para Android. La interfaz presenta el mapa de la ruta, las distancias de los
+sensores, la posición y el rumbo, el estado del sensor de gas y los botones de
+inicio, parada, centrado y limpieza del mapa.
+
+El mapa mantiene una escala estable: en lugar de reajustarse en cada lectura,
+solo se aleja cuando la ruta crece y siempre incluye al robot, de modo que el
+trazo no se comprima ni desaparezca al regresar a una zona ya visitada. Los
+puntos rojos se reservan exclusivamente para los lugares donde se detectó gas;
+los obstáculos no se pintan. Cuando hay alarma, la pantalla parpadea y se
+muestra un aviso superior. El diseño prescinde de tarjetas y coloca los
+elementos directamente sobre el fondo, con iconos vectoriales propios.
+
+\begin{figure}[H]
+  \centering
+  \IfFileExists{imagen3.png}{%
+    \includegraphics[width=0.6\textwidth]{imagen3.png}%
+  }{%
+    \fbox{\parbox[t][6cm][c]{0.6\textwidth}{\centering \textbf{Espacio reservado para la Imagen 3}\\
+    Captura de la aplicación RMADG1 mostrando el mapa de ruta y la telemetría.}}%
+  }
+  \caption{Interfaz de monitoreo de la aplicación móvil RMADG1.}
+  \label{fig:app}
+\end{figure}
+
+\textbf{Pruebas y validación}
+
+Se verificó el recorrido completo de la información desde el ESP32 hasta la
+aplicación Android. En una prueba de detección de gas, la lectura registrada en
+Supabase presentó la bandera de alarma en verdadero y la salida digital del
+sensor en alto, confirmando que el firmware interrumpe el movimiento y reporta
+el evento. En otra sesión se comprobó que el intervalo entre lecturas
+consecutivas era cercano a un segundo, con tiempos de funcionamiento
+crecientes y sin reinicios.
+
+También se identificó un evento de reinicio por caída de voltaje cuando los
+motores y el WiFi operaban simultáneamente, lo que puso de manifiesto la
+importancia de una alimentación robusta y de condensadores de desacople en el
+controlador de motores. Las correcciones de software incluyeron el filtro de
+gas, la separación de tareas de red y la eliminación de detenciones
+innecesarias antes de cada petición HTTP.
+
+%% ============================================================================
+%% RESULTADOS
+%% ============================================================================
+\textbf{\large Resultados}
+
+La integración de los tres subsistemas permitió cumplir el objetivo general.
+El vehículo avanza de forma autónoma, detecta obstáculos y selecciona un rumbo
+despejado, detiene su marcha al detectar gas y reporta dicho evento a la nube y
+a la aplicación móvil. La telemetría se actualiza con una periodicidad cercana
+al segundo y los comandos enviados desde la aplicación se ejecutan sin
+intervención de una computadora intermedia.
+
+La tabla siguiente resume los principales indicadores observados:
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Indicador} & \textbf{Valor observado} \\ \midrule
+Intervalo de telemetría & Aproximadamente 1.2 s \\
+Distancia de gatillo frontal & 50 cm \\
+Umbral de evasión lateral & 70 cm \\
+Confirmación de gas & 20 de 24 muestras (1.2 s) \\
+Memoria de programa usada & 36\% del espacio disponible \\
+Estados del LED azul & Fijo, latido lento y parpadeo rápido \\ \bottomrule
+\end{tabular}
+\caption{Indicadores de funcionamiento del sistema}
+\end{table}
+
+%% ============================================================================
+%% CONCLUSIONES
+%% ============================================================================
+\textbf{\large Conclusiones}
+
+Se diseñó e implementó una etapa de comunicación WiFi para un vehículo
+terrestre autónomo, integrando firmware embebido, backend en la nube y
+aplicación móvil. La arquitectura permite supervisar el estado del vehículo y
+enviar órdenes de control de manera remota, sin depender de una conexión cableada
+durante la operación.
+
+El uso de dos tareas independientes para la comunicación resolvió la latencia
+introducida por los handshakes HTTPS, y el filtro por mayoría evitó que los
+transitorios de corriente de los motores generaran alarmas falsas de gas. La
+navegación reactiva con tres sensores ultrasónicos redujo el tiempo dedicado a
+la búsqueda de una ruta, y el giroscopio permitió mediciones de rumbo más
+precisas sin recurrir a calibraciones prolongadas.
+
+La aplicación móvil presenta la información de forma clara y mantiene la ruta
+trazada aun cuando el robot se desplaza, con los eventos de gas marcados en
+rojo. Como trabajo futuro se propone reforzar la alimentación eléctrica,
+incorporar un sistema de gestión de batería, mejorar la precisión de la
+odometría mediante codificadores y ampliar las pruebas de campo con distintos
+tipos de obstáculos.
+
+%% ============================================================================
+%% AGRADECIMIENTOS
+%% ============================================================================
+\textbf{\large Agradecimientos}
+
+Agradezco a la M.C. Alba Maribel Sánchez Gálvez por su orientación y apoyo
+durante el desarrollo de este proyecto. A la Facultad de Ciencias de la
+Computación de la BUAP por las instalaciones y recursos utilizados, y al
+programa Haciendo Ciencia en la BUAP por la oportunidad de realizar esta
+investigación. A mi familia por su apoyo incondicional.
+
+%% ============================================================================
+%% REFERENCIAS (10pt)
+%% ============================================================================
+\textbf{\large Referencias}
+
+{\fontsize{10}{12}\selectfont
+\begin{enumerate}
+  \item Espressif Systems, ``ESP32 Technical Reference Manual,'' 2024.
+        Disponible: \url{https://www.espressif.com/en/support/documents/technical-documents}
+  \item R. Siegwart, I. R. Nourbakhsh y D. Scaramuzza,
+        \textit{Introduction to Autonomous Mobile Robots}, 2nd ed.
+        Cambridge, MA: MIT Press, 2011.
+  \item Espressif Systems, ``ESP32 WiFi Driver,'' Documentación técnica, 2024.
+        Disponible: \url{https://docs.espressif.com/projects/esp-idf/}
+  \item Supabase, ``Supabase Documentation: Database, REST and Realtime,'' 2024.
+        Disponible: \url{https://supabase.com/docs}
+  \item J. Borenstein, H. Everet, L. Feng y D. Wehe, ``Mobile robot
+        positioning: Sensors and techniques,'' \textit{Journal of Robotic
+        Systems}, vol. 14, no. 4, pp. 239--267, 1997.
+  \item React Native, ``React Native Documentation,'' 2024.
+        Disponible: \url{https://reactnative.dev/docs/getting-started}
+  \item Arduino, ``Arduino CLI Documentation,'' 2024.
+        Disponible: \url{https://arduino.github.io/arduino-cli/}
+  \item TDK InvenSense, ``MPU-6050 Product Specification,'' 2013.
+        Disponible: \url{https://invensense.tdk.com/products/motion-tracking/6-axis/mpu-6050/}
+  \item Hanwei Electronics, ``MQ-2 Gas Sensor Datasheet,'' Disponible:
+        \url{https://www.hwsensor.com/}
+  \item Elecfreaks, ``HC-SR04 Ultrasonic Module Datasheet,'' Disponible:
+        \url{https://www.elecfreaks.com/}
+  \item FreeRTOS, ``FreeRTOS Documentation,'' 2024.
+        Disponible: \url{https://www.freertos.org/}
+  \item TypeScript, ``TypeScript Documentation,'' 2024.
+        Disponible: \url{https://www.typescriptlang.org/docs/}
+\end{enumerate}
+}
+
+\end{document}
