@@ -107,7 +107,7 @@ y los resultados obtenidos.
 
 La robótica móvil autónoma ha experimentado un crecimiento significativo en las
 últimas décadas, impulsada por avances en microcontroladores de bajo costo,
-sensores y plataformas de internet de las cosas (IoT) [1]. Los vehículos
+sensores y plataformas de internet de las cosas (IoT) [1], [5]. Los vehículos
 terrestres con ruedas son ampliamente utilizados en aplicaciones de exploración,
 logística, vigilancia y en ambientes donde la presencia humana resulta onerosa
 o peligrosa.
@@ -136,6 +136,7 @@ Los objetivos específicos del trabajo son:
   \item Desarrollar una aplicación móvil para el monitoreo y control remoto.
   \item Realizar pruebas de funcionamiento y documentar los resultados.
 \end{enumerate}
+\newpage
 
 %% ============================================================================
 %% DESARROLLO
@@ -149,14 +150,14 @@ frontend. La capa de hardware está constituida por un microcontrolador ESP32
 DevKit V1, un controlador de motores L298N, dos motores de corriente continua
 con reducción, tres sensores ultrasónicos HC--SR04, un sensor de gas MQ--2, un
 módulo giroscópico MPU6050 y un par de baterías 18650 con un regulador
- reductor de 5 V. La alimentación de los motores y la lógica digital comparten
+reductor de 5 V. La alimentación de los motores y la lógica digital comparten
 una referencia de tierra común.
 
 La capa de firmware, escrita en C++ sobre el entorno Arduino, adquiere los
-sensores, decide el movimiento y publica la telemetría. La capa de backend
-corresponde a Supabase, que expone una API REST sobre PostgreSQL y provee
-suscripciones en tiempo real. La capa de frontend es una aplicación Android
-nativa construida con React Native y TypeScript.
+sensores, decide el movimiento y publica la telemetría [4], [8]. La capa de
+backend corresponde a Supabase, que expone una API REST sobre PostgreSQL y
+provee suscripciones en tiempo real. La capa de frontend es una aplicación
+Android nativa construida con React Native y TypeScript.
 
 El flujo de información es bidireccional: el ESP32 envía lecturas a la tabla
 \texttt{lecturas\_robot} y consulta la tabla \texttt{comandos\_robot}; la
@@ -206,21 +207,21 @@ adaptado a las restricciones del proyecto.
 \textbf{ESP32 versus Raspberry Pi}: el ESP32 integra WiFi y tiene un consumo
 energético reducido, lo que permite operación prolongada con baterías 18650.
 Además, dispone de suficientes pines para los tres ultrasónicos, el sensor de
-gas y el control de motores [3].
+gas y el control de motores [2].
 
 \textbf{Supabase versus un servidor propio}: la plataforma provee una API REST
 lista para usar, autenticación mediante clave publishable, políticas de
 seguridad por fila y suscripciones en tiempo real sin necesidad de mantener
-infraestructura adicional [4].
+infraestructura adicional [5].
 
 \textbf{Tres sensores ultrasónicos versus LiDAR}: los HC--SR04 son de bajo
 costo y suficientes para detectar obstáculos en interiores. Al disponer de
 mediciones frontal, izquierda y derecha es posible decidir el rumbo sin barrer
-el ambiente por completo en cada evento [5].
+el ambiente por completo en cada evento [12].
 
 \textbf{React Native versus desarrollo nativo}: permite construir la interfaz
 con una sola base de código y generar un APK para Android, con bibliotecas
-maduras para gestos y gráficos vectoriales [6].
+maduras para gestos y gráficos vectoriales [6], [7].
 
 \textbf{JSON construido manualmente versus ArduinoJson}: dado que el número de
 campos es fijo y pequeño, la concatenación de cadenas evita el consumo de memoria
@@ -233,7 +234,7 @@ tiempo de eco con \texttt{pulseIn}, con un tiempo de espera máximo de 18 ms.
 El tiempo se convierte a centímetros mediante la relación
 $d = t \cdot 0.0343/2$. Se toman tres muestras y se utiliza la mediana para
 reducir el efecto de ecos espurios. Un valor de cero se interpreta como
-``sin eco'', es decir, vía libre, y no como un obstáculo pegado al robot.
+``sin eco'', es decir, vía libre, y no como un obstáculo pegado al robot [12].
 
 El sensor MQ--2 se emplea en modo digital: la salida DO se conecta al GPIO 23
 con resistencia de pull--up interna. Experimentalmente se verificó que dicha
@@ -241,13 +242,13 @@ salida permanece en nivel bajo con aire limpio y pasa a nivel alto en presencia
 de gas. Para evitar falsas alarmas originadas por transitorios de corriente al
 arrancar los motores, se aplica un filtro por mayoría sobre las últimas 24
 muestras: la alarma se activa cuando al menos 20 de ellas están en alto, lo que
-equivale a 1.2 segundos, y se libera cuando el sensor permanece limpio.
+equivale a 1.2 segundos, y se libera cuando el sensor permanece limpio [11].
 
 El MPU6050 se comunica por $I^2C$ y se configura en una escala de
 $\pm 500$ grados por segundo. La integración de la velocidad angular permite
 detener un giro exactamente en el ángulo deseado y alimentar la odometría del
 mapa. El bias del giroscopio se estima con el robot detenido y se actualiza
-durante las esperas para evitar deriva.
+durante las esperas para evitar deriva [13].
 
 \textbf{Firmware y algoritmo de navegación}
 
@@ -271,7 +272,7 @@ FreeRTOS ubicadas en el núcleo 0, cada una con su propio cliente TLS. Esta
 separación evita que el handshake HTTPS bloquee el bucle de movimiento, que se
 ejecuta en el núcleo 1. Como resultado, la telemetría se publica cada
 aproximadamente 1.2 segundos y los comandos se reciben en menos de un
-segundo.
+segundo [3], [9].
 
 Los comandos disponibles son \texttt{ini} y \texttt{alto} para iniciar y
 detener el movimiento, \texttt{ping} para verificar el enlace, \texttt{mq2}
@@ -324,7 +325,8 @@ trazo no se comprima ni desaparezca al regresar a una zona ya visitada. Los
 puntos rojos se reservan exclusivamente para los lugares donde se detectó gas;
 los obstáculos no se pintan. Cuando hay alarma, la pantalla parpadea y se
 muestra un aviso superior. El diseño prescinde de tarjetas y coloca los
-elementos directamente sobre el fondo, con iconos vectoriales propios.
+elementos directamente sobre el fondo, con iconos vectoriales propios [6], [7],
+[10].
 
 \begin{figure}[H]
   \centering
@@ -369,7 +371,7 @@ intervención de una computadora intermedia.
 
 La tabla siguiente resume los principales indicadores observados:
 
-\begin{table}[h]
+\begin{table}[H]
 \centering
 \small
 \begin{tabular}{@{}ll@{}}
@@ -415,12 +417,12 @@ tipos de obstáculos.
 %% ============================================================================
 \textbf{\large Agradecimientos}
 
-Agradezco a la Mtra. Alba Maribel Sánchez Gálvez por su orientación y apoyo
-durante el desarrollo de este proyecto. A la Facultad de Ciencias de la
-Computación y a la Facultad de Ciencias de la Electrónica de la BUAP por las
-instalaciones y recursos utilizados, y al programa Haciendo Ciencia en la BUAP
-por la oportunidad de realizar esta investigación. A mi familia por su apoyo
-incondicional.
+Agradezco a la Mtra. Alba Maribel Sánchez Gálvez y al Mtro. Ricardo Álvarez
+González por su orientación y apoyo durante el desarrollo de este proyecto.
+A la Facultad de Ciencias de la Computación y a la Facultad de Ciencias de la
+Electrónica de la BUAP por las instalaciones y recursos utilizados, y al
+programa Haciendo Ciencia en la BUAP por la oportunidad de realizar esta
+investigación. A mi familia por su apoyo incondicional.
 
 %% ============================================================================
 %% REFERENCIAS (10pt)
@@ -436,12 +438,11 @@ incondicional.
   \setlength{\itemsep}{3pt}
   \setlength{\parsep}{0pt}
 }
+  \item K. Lynch y F. Ross, \textit{Modern Robotics: Mechanics, Planning, and
+        Control}, libro de acceso gratuito, 2017. Disponible:
+        \url{http://modernrobotics.org}
   \item Espressif Systems, ``ESP32 Technical Reference Manual,'' 2024.
         Disponible: \url{https://www.espressif.com/en/support/documents/technical-documents}
-  \item R. Siegwart, I. R. Nourbakhsh y D. Scaramuzza,
-        \textit{Introduction to Autonomous Mobile Robots}, 2nd ed.
-        Cambridge, MA: MIT Press, 2011. Disponible:
-        \url{https://books.google.com/books?id=4of6AQAAQBAJ}
   \item Espressif Systems, ``ESP-IDF Programming Guide,'' 2024.
         Disponible: \url{https://docs.espressif.com/projects/esp-idf/}
   \item Espressif Systems, ``arduino-esp32: Arduino core for ESP32,''
@@ -455,16 +456,18 @@ incondicional.
         2024. Disponible: \url{https://github.com/software-mansion/react-native-svg}
   \item Arduino, ``Arduino CLI Documentation,'' 2024.
         Disponible: \url{https://arduino.github.io/arduino-cli/}
-  \item TDK InvenSense, ``MPU-6050 Product Specification,'' 2013.
-        Disponible: \url{https://invensense.tdk.com/products/motion-tracking/6-axis/mpu-6050/}
-  \item Hanwei Electronics, ``MQ-2 Gas Sensor Datasheet.''
-        Disponible: \url{https://www.hwsensor.com/}
-  \item Elecfreaks, ``HC-SR04 Ultrasonic Module Datasheet.''
-        Disponible: \url{https://www.elecfreaks.com/}
   \item FreeRTOS, ``FreeRTOS Documentation,'' 2024.
         Disponible: \url{https://www.freertos.org/}
   \item TypeScript, ``TypeScript Documentation,'' 2024.
         Disponible: \url{https://www.typescriptlang.org/docs/}
+  \item Pololu, ``MQ-2 Semiconductor Sensor for Combustible Gas: datasheet,''
+        documento PDF público. Disponible: \url{https://www.pololu.com/file/0J309/MQ2.pdf}
+  \item SparkFun Electronics, ``HC-SR04 Ultrasonic Ranging Module: datasheet,''
+        documento PDF público. Disponible:
+        \url{https://cdn.sparkfun.com/datasheets/Sensors/Proximity/HCSR04.pdf}
+  \item TDK InvenSense, ``MPU-6000 and MPU-6050 Product Specification,''
+        documento PDF público, 2013. Disponible:
+        \url{https://product.tdk.com/system/files/dam/doc/product/sensor/mortion-inertial/imu/data_sheet/mpu-6000-datasheet1.pdf}
   \item A. Carreño González, ``Robot-Gas: firmware, aplicación móvil y
         navegación autónoma de un vehículo terrestre,'' repositorio público,
         2026. Disponible: \url{https://github.com/arcarreno/Robot-Gas}
