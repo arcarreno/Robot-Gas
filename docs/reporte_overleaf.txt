@@ -1,0 +1,104 @@
+% =====================================================================
+% REPORTE PARA OVERLEAF - Proyecto: Etapa de comunicación WiFi para un
+% vehículo terrestre autónomo
+%
+% INSTRUCCIONES:
+% 1. Crea un proyecto nuevo en Overleaf y pega todo este contenido en
+%    main.tex.
+% 2. Sube tus 3 imágenes con estos nombres exactos:
+%       imagen1.png   -> foto del robot / hardware (ESP32, L298N, sensores)
+%       imagen2.png   -> captura de la app RMADG1 (mapa y telemetría)
+%       imagen3.png   -> captura de Supabase (lecturas_robot / comandos_robot)
+%    Si usas otros nombres, cambia los nombres en los \IfFileExists.
+% 3. Si todavía no subes las imágenes, el documento compila igual y
+%    muestra recuadros con el espacio reservado.
+% =====================================================================
+
+\documentclass[11pt,letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage{geometry}
+\geometry{top=2.0cm, bottom=2.0cm, left=2.4cm, right=2.4cm}
+\usepackage{graphicx}
+\usepackage{array}
+
+% Sin cabecera azul ni pie de página: documento limpio, solo fondo blanco.
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+
+\begin{document}
+
+\begin{center}
+{\Large \bfseries Etapa de comunicación WiFi para un vehículo terrestre autónomo}\\[6pt]
+{\normalsize Angel Armando Carreño González}\\[2pt]
+{\normalsize Alba Maribel Sánchez Gálvez}
+\end{center}
+
+\vspace{4pt}
+
+El presente trabajo tuvo como propósito establecer una arquitectura de comunicación inalámbrica entre un vehículo terrestre autónomo y un centro de monitoreo remoto. La solución integra un firmware embebido en ESP32, un servicio de base de datos en la nube y una aplicación móvil Android, de modo que el vehículo envíe su telemetría en tiempo real y reciba órdenes de control a distancia. Además, se incorporó la detección de gas como condición de parada de seguridad y la navegación autónoma con evasión de obstáculos.
+
+\section*{Actividades Realizadas}
+
+\begin{itemize}
+
+\item \textbf{Firmware embebido en ESP32.} Se implementó el software de control del vehículo: avance recto, evasión de obstáculos con tres sensores ultrasónicos (frente, izquierda y derecha), medición del giro con el MPU6050 y detección de gas con el sensor MQ--2. El firmware publica la telemetría y atiende comandos mediante dos tareas independientes, con clientes TLS separados, lo que permitió reducir el intervalo de actualización de datos a aproximadamente un segundo sin bloquear el movimiento.
+
+\item \textbf{Comunicación WiFi y backend en Supabase.} Se configuró el enlace inalámbrico y el esquema de datos en la nube, con tablas para lecturas del robot y comandos de control, políticas de seguridad por fila y suscripción en tiempo real. El ESP32 envía de manera continua la posición, el rumbo, las distancias medidas y el estado del sensor de gas, y consulta periódicamente la tabla de comandos para ejecutar las órdenes enviadas desde la aplicación.
+
+\item \textbf{Aplicación móvil Android.} Se desarrolló la aplicación RMADG1 en React Native y TypeScript. La interfaz muestra el mapa de la ruta recorrida, con escala estable que sigue al robot, points rojos únicamente en los lugares donde se detectó gas, distancias de los ultrasónicos, posición y rumbo, y un aviso visual parpadeante cuando se presenta una alarma de gas. Los controles de inicio y parada se envían directamente a la nube.
+
+\item \textbf{Algoritmo de navegación.} Se adoptó una estrategia reactiva basada en los tres sensores ultrasónicos: al detectar un obstáculo de frente se compara el lado izquierdo y el derecho y se gira hacia el rumbo más despejado; el barrido completo de ocho pasos de 45 grados se reserva para situaciones de callejón sin salida. Los giros se detienen con la lectura del giroscopio, evitando sobre--giros y tiempos muertos.
+
+\item \textbf{Pruebas de integración y validación.} Se verificó el recorrido completo de la información: ESP32 $\rightarrow$ red WiFi $\rightarrow$ Supabase $\rightarrow$ aplicación Android. Se comprobó el registro continuo de lecturas, la recepción de comandos, la correcta generación de la alarma de gas y la visualización de los datos en el cliente móvil. Se documentó el cableado, los pines utilizados y los procedimientos de prueba en el repositorio del proyecto.
+
+\end{itemize}
+
+\begin{figure}[h]
+\centering
+\IfFileExists{imagen1.png}{%
+  \includegraphics[width=0.75\linewidth]{imagen1.png}%
+}{%
+  \fbox{\parbox[t][6cm][c]{0.75\linewidth}{\centering \textbf{Espacio reservado para la Imagen 1}\\ Fotografía del prototipo del vehículo y su etapa de comunicación.}}%
+}
+\caption{Prototipo del vehículo terrestre autónomo y etapa de comunicación WiFi.}
+\end{figure}
+
+\section*{Trabajo Pendiente}
+
+\begin{itemize}
+
+\item Realizar pruebas de campo del vehículo en un entorno controlado con obstáculos, para ajustar los umbrales de distancia y los tiempos de giro de la maniobra de evasión.
+
+\item Verificar la estabilidad de la alimentación eléctrica durante el accionamiento simultáneo de los motores, el WiFi y el sensor de gas, con el fin de evitar reinicios por caída de voltaje.
+
+\item Complementar la documentación con las tres figuras del reporte: fotografía del hardware, captura de la aplicación móvil y captura de la base de datos en Supabase.
+
+\item Ejecutar las pruebas finales de aceptación de la aplicación en el dispositivo Android y consolidar el reporte y el código en el repositorio del proyecto.
+
+\end{itemize}
+
+\begin{figure}[h]
+\centering
+\IfFileExists{imagen2.png}{%
+  \includegraphics[width=0.8\linewidth]{imagen2.png}%
+}{%
+  \fbox{\parbox[t][7cm][c]{0.8\linewidth}{\centering \textbf{Espacio reservado para la Imagen 2}\\ Captura de la aplicación RMADG1 con el mapa de ruta y la telemetría.}}%
+}
+\caption{Interfaz de monitoreo de la aplicación móvil RMADG1.}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\IfFileExists{imagen3.png}{%
+  \includegraphics[width=0.8\linewidth]{imagen3.png}%
+}{%
+  \fbox{\parbox[t][7cm][c]{0.8\linewidth}{\centering \textbf{Espacio reservado para la Imagen 3}\\ Captura de las lecturas y comandos registrados en Supabase.}}%
+}
+\caption{Registro de telemetría y comandos en la plataforma Supabase.}
+\end{figure}
+
+\end{document}
