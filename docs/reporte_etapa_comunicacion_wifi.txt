@@ -69,7 +69,7 @@
 {\fontsize{14}{16}\selectfont \textbf{Etapa de comunicación WiFi para un vehículo terrestre autónomo}}
 
 \vspace{-0.3cm}
-{\fontsize{10}{12}\selectfont Angel Armando Carreño González$^{1}$, Mtro. Ricardo Álvarez González$^{2}$}
+{\fontsize{10}{12}\selectfont Angel Armando Carreño González$^{1}$, Mtra. Alba Maribel Sánchez Gálvez$^{2}$}
 
 \vspace{-0.2cm}
 {\fontsize{10}{12}\selectfont Facultad de Ciencias de la Computación$^{1}$, Facultad de Ciencias de la Electrónica$^{2}$}
@@ -413,7 +413,7 @@ tipos de obstáculos.
 %% ============================================================================
 \textbf{\large Agradecimientos}
 
-Agradezco al Mtro. Ricardo Álvarez González por su orientación y apoyo
+Agradezco a la Mtra. Alba Maribel Sánchez Gálvez por su orientación y apoyo
 durante el desarrollo de este proyecto. A la Facultad de Ciencias de la
 Computación y a la Facultad de Ciencias de la Electrónica de la BUAP por las
 instalaciones y recursos utilizados, y al programa Haciendo Ciencia en la BUAP
