@@ -42,7 +42,7 @@
 %% ---- Numeración centrada abajo ----
 \pagestyle{fancy}
 \fancyhf{}
-\fancyfoot[C]{\thepage}
+\fancyfoot[C]{\fontsize{10}{12}\selectfont \thepage}
 \renewcommand{\headrulewidth}{0pt}
 \renewcommand{\footrulewidth}{0pt}
 
