@@ -13,7 +13,7 @@
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{multirow}
-\usepackage{url}
+\usepackage[hyphens]{url}
 \usepackage{hyperref}
 \usepackage{listings}
 \usepackage{xcolor}
@@ -38,6 +38,9 @@
 %% ---- Sin sangría después de punto y aparte ----
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{6pt}
+% Permite que las URLs largas se partan en guiones y no desborden.
+\Urlmuskip=0mu plus 2mu\relax
+\setlength{\emergencystretch}{2em}
 
 %% ---- Numeración centrada abajo ----
 \pagestyle{fancy}
@@ -430,6 +433,7 @@ investigación. A mi familia por su apoyo incondicional.
 \textbf{\large Referencias}
 
 {\fontsize{10}{12}\selectfont
+\begin{sloppypar}
 \begin{list}{[$\arabic{enumi}$]}{%
   \usecounter{enumi}
   \setlength{\leftmargin}{1.1cm}
@@ -472,6 +476,7 @@ investigación. A mi familia por su apoyo incondicional.
         navegación autónoma de un vehículo terrestre,'' repositorio público,
         2026. Disponible: \url{https://github.com/arcarreno/Robot-Gas}
 \end{list}
+\end{sloppypar}
 }
 
 \end{document}
