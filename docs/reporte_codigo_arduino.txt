@@ -1,0 +1,562 @@
+================================================================================
+REPORTE DE ANALISIS DEL FIRMWARE
+Archivo analizado: D:\programa Robot Carr\RMA_3S_Mapa\RMA_3S_Mapa.ino
+Total: 605 lineas
+Robot: vehiculo diferencial de dos ruedas, ESP32 DevKit V1
+================================================================================
+
+INDICE
+  1. Vision general y mapa de lineas
+  2. Cabecera e inclusiones (lineas 1-30)
+  3. Pines y constantes (lineas 32-82)
+  4. Modulo giroscopio MPU6050 (lineas 84-104)
+  5. Control de motores (lineas 106-119)
+  6. Sensores ultrasónicos (lineas 121-148)
+  7. Sensor de gas MQ-2 (lineas 150-171)
+  8. Movimiento y evasión (lineas 173-279)
+  9. LED de estado (lineas 281-286)
+ 10. Comandos (lineas 288-337)
+ 11. Comunicacion Supabase (lineas 339-444)
+ 12. Tareas FreeRTOS (lineas 446-467)
+ 13. Setup (lineas 469-521)
+ 14. Loop principal (lineas 523-605)
+ 15. ODOMETRIA: lineas exactas y explicacion detallada
+ 16. Observaciones y posibles mejoras
+
+================================================================================
+1. VISION GENERAL Y MAPA DE LINEAS
+================================================================================
+
+El firmware es un unico archivo .ino con estructura Arduino estandar:
+  - setup()  (lineas 473-521): se ejecuta una vez al encender.
+  - loop()   (lineas 523-605): se ejecuta indefinidamente.
+
+Bloques y rangos:
+
+  LINEAS        CONTENIDO
+  1-10          Comentario descriptivo del programa
+  12-17         Librerias (WiFi, HTTP, I2C, sistema ESP32)
+  19-30         Credenciales: secrets.h o valores vacios de respaldo
+  32-46         Pines fisicos y variables del giroscopio
+  48-62         Constantes de ajuste (velocidades, distancias, unidades)
+  64-82         Variables de estado globales
+  84-104        Funciones del MPU6050
+  106-119       Funciones de motores
+  121-148       Funciones de ultrasonido
+  150-171       Funcion del sensor de gas
+  173-279       Funciones de giro y evasión
+  281-286       Funcion del LED
+  288-337       Funciones de comandos (serial)
+  339-444       Funciones de red/Supabase
+  446-467       Tareas FreeRTOS de red
+  469-521       setup()
+  523-605       loop()
+
+================================================================================
+2. CABECERA E INCLUSIONES (LINEAS 1-30)
+================================================================================
+
+Lineas 1-10:
+  Comentario que resume el comportamiento: avanzar, evadir con 8 pasos de 45
+  grados, parar por gas y recibir comandos. Indica que NO hay giroscopio para
+  corregir el rumbo, ni calibraciones, ni PID (aunque el giroscopio SÍ se usa
+  para medir angulos de giro y para el rumbo del mapa, como se vera mas abajo).
+
+Linea 12: #include <WiFi.h>
+  Librería WiFi del ESP32.
+
+Linea 13: #include <WiFiMulti.h>
+  Permite registrar varias redes WiFi y conectarse a la que esté disponible.
+
+Linea 14: #include <WiFiClientSecure.h>
+  Cliente TCP con TLS (HTTPS), necesario para Supabase.
+
+Linea 15: #include <HTTPClient.h>
+  Cliente HTTP de alto nivel: POST, GET, PATCH.
+
+Linea 16: #include <Wire.h>
+  Bus I2C para el MPU6050 (direccion 0x68).
+
+Linea 17: #include "esp_system.h"
+  API del sistema: esp_reset_reason() para saber por que reinicio el ESP32.
+
+Lineas 19-30: bloque condicional
+  #if __has_include("secrets.h")
+    Si existe secrets.h (archivo local, NO subido al repo), se incluye con
+    las credenciales reales: REDES_WIFI, SUPABASE_URL, SUPABASE_CMD_URL,
+    SUPABASE_CMD_URL_BASE y SUPABASE_KEY.
+  #else
+    Si no existe, se definen valores vacios y se emite un warning: el robot
+    compila y funciona, pero sin WiFi ni nube. Esto permite clonar el repo
+    sin filtrar contraseñas.
+
+================================================================================
+3. PINES Y CONSTANTES (LINEAS 32-82)
+================================================================================
+
+Lineas 33-34: motores (puente H L298N)
+  EN_DER = 4  -> PWM del motor derecho (velocidad)
+  IN1 = 12, IN2 = 14 -> sentido de giro del motor derecho
+  EN_IZQ = 15 -> PWM del motor izquierdo
+  IN3 = 33, IN4 = 32 -> sentido de giro del motor izquierdo
+
+Lineas 35-37: tres sensores HC-SR04 (cada uno Trig + Echo)
+  Frente: Trig 5, Echo 18
+  Izquierda: Trig 17, Echo 16
+  Derecha: Trig 25, Echo 34
+  (GPIO 34 es solo entrada, por eso sirve para Echo).
+
+Linea 38: BTN_F = 26 -> bumper frontal, con INPUT_PULLUP (LOW = pulsado).
+
+Linea 39: MQ2_DO = 23 (salida digital), MQ2_AO = 36 (salida analogica, ADC1).
+Linea 40: LED = 2 -> LED azul integrado de la placa.
+Linea 41: ENC_IZQ = 19, ENC_DER = 13 -> entradas de los encoders (un canal c/u).
+
+Lineas 43-46: MPU6050
+  MPU_ADDR = 0x68 (direccion I2C).
+  gyroZ: velocidad angular actual en rad/s.
+  gyroBias: valor de reposo que se resta para quitar deriva.
+  tGyro: instante de la ultima lectura del gyro.
+
+Lineas 49-54: ajustes
+  VEL_AVANCE = 190 -> PWM de avance (0-255).
+  VEL_GIRO   = 170 -> PWM de giro en el sitio.
+  DIST_OBSTACULO = 50.0f -> gatillo: si el frente mide menos de 50 cm, evadir.
+  DIST_LIBRE = 300.0f -> valor que se usa cuando no hay eco (via libre).
+  CM_POR_SEG = 25.0f -> velocidad lineal estimada a PWM 190, usada por la
+                        odometria por tiempo (linea 578).
+
+Lineas 56-58: SENTIDO_IZQ / SENTIDO_DER
+  Multiplicadores manuales de polaridad. Si el robot gira en circulos en vez
+  de avanzar, se cambia UNO de los dos a -1. Reemplaza la antigua
+  autocalibracion de motores, que fallaba.
+
+Lineas 60-62: tiempos (aunque T_TELEMETRIA y T_COMANDOS ya no se usan en el
+  loop porque la red paso a tareas FreeRTOS; quedaron como referencia).
+  T_HTTP = 3000 ms -> timeout de las peticiones HTTPS.
+
+Lineas 65-68: objetos de red
+  wifi: WiFiMulti.
+  tlsTel y tlsCmd: DOS clientes TLS separados, uno por tarea. Compartir uno
+  solo hacia que la telemetria saliera cada ~3 s.
+
+Lineas 70-82: estado global
+  moviendo: bandera "el robot debe estar en marcha".
+  theta: rumbo estimado en radianes (0 = direccion inicial).
+  dFrente, dIzq, dDer: distancias de los tres ultrasónicos en cm.
+  gas: alarma activa. gasCorte: permite o no cortar por gas. doUtil: el DO
+       del MQ-2 ya se vio en LOW (conectado). ppm: estimacion analogica.
+  encIzq, encDer: contadores de pulsos de encoder (volatile, se escriben en ISR).
+  prevIzq, prevDer: ultimo valor leido de esos contadores.
+  x, y: posicion estimada en METROS (la telemetria la pasa a cm).
+  tTelemetria, tComandos, tOdo: marcas de tiempo.
+  resetReason: motivo del ultimo reinicio del ESP32.
+
+================================================================================
+4. MODULO GIROSCOPIO MPU6050 (LINEAS 84-104)
+================================================================================
+
+initMPU() (lineas 85-94):
+  - Wire.begin(): arranca el bus I2C.
+  - Wire.setTimeOut(100): 100 ms de espera maxima.
+  - Escribe 0x00 en el registro 0x6B: saca el chip del modo dormida.
+  - Escribe 0x08 en el registro 0x1B: configura el giroscopio a +-500 dps
+    (grados por segundo). Con esa escala, 1 bit = 500/32768 = 0.01526 dps,
+    por eso el factor 65.5 (cuentas por rad/s: 32768/500*57.2958 = 65.5).
+
+leerGyroZ() (lineas 96-104):
+  - Apunta al registro 0x47 (GYRO_ZOUT_H) y pide 2 bytes.
+  - Une los dos bytes en int16_t raw (giro en el eje Z).
+  - gyroZ = (raw / 65.5f) * DEG_TO_RAD -> pasa a rad/s.
+  - Devuelve true si la lectura fue correcta, false si fallo el I2C.
+  Es la unica medicion de orientacion del sistema: se usa en girar(),
+  girarHastaDespejar(), en el re-cero del bias y en la odometria de rumbo.
+
+================================================================================
+5. CONTROL DE MOTORES (LINEAS 106-119)
+================================================================================
+
+motores(int izq, int der) (lineas 107-117):
+  - Lineas 108-109: aplica SENTIDO_IZQ y SENTIDO_DER (polaridad manual).
+  - Lineas 110-112 (motor derecho): si der >= 0, IN1=HIGH e IN2=LOW
+    (adelante); si es negativo, se invierten. ledcWrite aplica el valor
+    absoluto como PWM en EN_DER.
+  - Lineas 114-116: igual para el izquierdo con IN3/IN4 y EN_IZQ.
+  Los dos motores reciben la misma señal para avanzar; valores opuestos
+  hacen pivotar en el sitio.
+
+parar() (linea 119):
+  motores(0, 0): PWM cero en ambos, sin rampa (parada inmediata, importante
+  cuando salta la alarma de gas).
+
+================================================================================
+6. SENSORES ULTRASONICOS (LINEAS 121-148)
+================================================================================
+
+medir(trig, echo) (lineas 122-129):
+  - Linea 123: pulso de bajada y subida de 3 us para estabilizar.
+  - Linea 124: pulso de 10 us en Trig (dispara el HC-SR04).
+  - Linea 126: pulseIn mide cuanto tiempo el Echo esta en HIGH, con timeout
+    de 18000 us (18 ms => ~3 m).
+  - Linea 127: si us == 0 no hubo eco -> devuelve 0. Ojo: 0 significa
+    "via libre", NO "obstaculo pegado".
+  - Linea 128: d = us * 0.0343 / 2. El 0.0343 es la velocidad del sonido
+    en cm/us (343 m/s); se divide entre 2 porque el sonido va y vuelve.
+
+medirFrente() (lineas 131-143):
+  - Toma 3 mediciones del sensor frontal (lineas 133-137), descarta las
+    menores o iguales a 2 cm (ruido) y guarda las validas en v[].
+  - Linea 138: si ninguna es valida, devuelve DIST_LIBRE (300).
+  - Lineas 139-142: ordena burbujeo y devuelve la MEDIANA v[n/2].
+    La mediana rechaza un eco espurio aislado.
+
+medirLado(trig, echo) (lineas 145-148):
+  Una sola medicion; devuelve 0 si es menor a 2 cm (sin eco util).
+
+================================================================================
+7. SENSOR DE GAS MQ-2 (LINEAS 150-171)
+================================================================================
+
+leerGas() (lineas 151-171):
+  - Lineas 152-156: muestrea como maximo cada 50 ms (20 Hz). tMuestra y
+    histDO son static: conservan su valor entre llamadas.
+  - Linea 158: lee el DO (GPIO 23).
+  - Linea 159: lee el AO (GPIO 36) y lo pasa a voltios (ADC de 12 bits).
+  - Linea 160: ppm = (v - 0.8) * 800, estimacion lineal solo para la app.
+    En este modulo el AO esta desconectado (0 V), asi que ppm = 0.
+  - Linea 163: si el DO se ve en LOW, marca doUtil = true (confirmacion de
+    que el pin esta conectado; si estuviera al aire, el pull-up lo deja HIGH).
+  - Linea 165: histDO = (histDO << 1) | bit -> registro de desplazamiento de
+    24 bits con el historial de las ultimas 24 muestras (1.2 s).
+  - Lineas 166-167: cuenta cuantos de esos 24 bits estan en HIGH.
+  - Linea 169: alarma con 20 de 24 en HIGH (filtro por mayoria). Esto
+    descarta los pulsos falsos que produce el pico de corriente de los motores.
+  - Linea 170: se libera cuando 22 o mas de 24 estan en LOW.
+  La alarma NO se enciende con 500 ms aislados, que era el bug anterior.
+
+================================================================================
+8. MOVIMIENTO Y EVASION (LINEAS 173-279)
+================================================================================
+
+Linea 174: declaracion anticipada de atenderSerial(), porque girar() la llama
+  antes de que la funcion este definida mas abajo.
+
+girar(int grados) (lineas 178-207):
+  - Linea 179: ignora giros menores a 5 grados.
+  - Linea 180: objetivo en radianes.
+  - Linea 183: tope de seguridad = |grados|*22 ms + 800 ms.
+  - Lineas 185-186: motores opuestos (uno adelante, otro atras) segun signo.
+  - Lineas 188-200: bucle que integra gyroZ (acum) hasta alcanzar objetivo.
+    Llama a atenderSerial() y leerGas() dentro para no quedarse sordo.
+    Sale por alarma de gas o por comando "alto".
+  - Lineas 201-206: para, reinicia tGyro, suma el giro a theta y lo
+    normaliza a [-PI, PI].
+
+girarHastaDespejar(int sentido) (lineas 212-240):
+  - Igual que girar(), pero NO gira un angulo fijo: gira hasta que el sensor
+    frontal vuelve a ver mas de 1.8 * 50 = 90 cm (linea 227-228).
+  - Exige al menos 12 grados antes de dar por valido el despeje, para no
+    creer un eco pendiente del giro anterior.
+  - Tope de 3.5 s.
+  - Linea 237: theta += acum (el angulo REAL medido, no el supuesto).
+
+esquivar() (lineas 245-279):
+  - Linea 246: parar.
+  - Lineas 249-250: vuelve a medir el frente tras 60 ms; si ya esta libre,
+    sale (falso eco). Tecnica tomada del WallCar de GitHub.
+  - Lineas 252-253: distancias laterales; 0 se convierte en DIST_LIBRE (300).
+  - Lineas 255-262: si algun lado supera 70 cm, gira hacia el lado mas
+    despejado con girarHastaDespejar() y termina. Es la decision rapida.
+  - Lineas 264-278: si ambos lados estan tapados, barrido de 8 pasos de 45
+    grados (8 x 45 = 360), guardando la mejor distancia y en que paso estaba.
+    Al final gira hacia el mejor rumbo (o 180 grados si todo esta cerrado).
+
+================================================================================
+9. LED DE ESTADO (LINEAS 281-286)
+================================================================================
+
+actualizarLED() (lineas 281-286):
+  - Con gas: parpadeo rapido (150 ms).
+  - Moviendo: LED fijo encendido.
+  - Detenido: latido lento (800 ms).
+  Es el unico indicador visual del estado del robot.
+
+================================================================================
+10. COMANDOS (LINEAS 288-337)
+================================================================================
+
+iniciar() (lineas 289-297):
+  Para, pone theta = 0, sincroniza prevIzq/prevDer con los encoders actuales
+  (para no contar un salto alcanzado estando quieto), activa moviendo y
+  responde ACK:INI. NO hay calibracion de motores.
+
+ejecutarComando(String cmd) (lineas 299-325):
+  - ini/start -> iniciar()
+  - alto/stop -> moviendo=false, parar()
+  - ping -> ACK:PONG
+  - gasoff / gason -> desactiva/activa el corte por gas
+  - mq2 -> imprime voltaje AO, estado DO, doUtil y gas
+  - cualquier otro -> ERR:CMD
+
+atenderSerial() (lineas 327-337):
+  Acumula caracteres hasta '\n' o '\r' y ejecuta el comando. Se llama en el
+  loop y tambien dentro de los giros, para poder frenar con "alto" en cualquier
+  momento.
+
+================================================================================
+11. COMUNICACION SUPABASE (LINEAS 339-444)
+================================================================================
+
+agregarCabeceras() (lineas 340-345):
+  Anade apikey, Authorization Bearer, Content-Type JSON y Prefer return=minimal.
+
+conectarWiFi() (lineas 347-361):
+  Registra las redes del secrets.h y espera hasta 20 s a que WiFiMulti
+  conecte. Imprime la IP.
+
+enviarTelemetria() (lineas 363-391):
+  - Linea 368: begin con tlsTel (cliente propio de esta tarea).
+  - Lineas 371-385: construye el JSON a mano con:
+      x_cm e y_cm = x*100 e y*100 (los internos estan en metros)
+      theta_rad, front_cm, left_cm, right_cm
+      gas_valor, gas_alerta, gas_ppm, gas_do, uptime_ms, reset_reason
+  - Linea 387: POST. Linea 390: actualiza tTelemetria.
+
+revisarComandos() (lineas 393-431):
+  - GET a comandos_robot filtrando procesado=eq.false, orden id asc, limite 1.
+  - Lineas 406-413: extrae el texto del "comando" y el "id" del JSON con
+    indexOf (sin ArduinoJson, para ahorrar memoria).
+  - Linea 418: ejecuta el comando.
+  - Lineas 420-430: PATCH para marcar procesado=true. Se cierra el GET antes
+    del PATCH para no compartir el cliente TLS con una respuesta abierta.
+
+descartarComandosViejos() (lineas 433-444):
+  Al arrancar, marca como procesados todos los comandos pendientes, para no
+  ejecutar ordenes atrasadas de una sesion anterior.
+
+================================================================================
+12. TAREAS FREERTOS (LINEAS 446-467)
+================================================================================
+
+tareaTelemetria() (lineas 449-455):
+  Bucle infinito: espera 100 ms (linea 452) y llama a enviarTelemetria().
+  El POST tarda ~1 s, asi que la frecuencia real de publicacion es ~1.2 s.
+
+tareaComandos() (lineas 457-467):
+  Bucle infinito: espera 1000 ms, revisa comandos; si no hay WiFi, cada 30 s
+  intenta reconectar.
+
+Ambas se crean en setup() (lineas 514-515) fijadas al nucleo 0 con
+xTaskCreatePinnedToCore(..., 0). El loop de Arduino corre en el nucleo 1.
+Esto evita que el handshake HTTPS bloquee la lectura de sensores y motores.
+
+================================================================================
+13. SETUP (LINEAS 469-521)
+================================================================================
+
+  Linea 474: Serial a 115200 baudios.
+  Linea 477: guarda el motivo de reinicio (1=POWERON, 9=BROWNOUT).
+  Lineas 480-488: configura la direccion de todos los pines.
+    Entradas con pull-up: bumper y MQ2_DO.
+    Entradas con pull-down: encoders.
+  Lineas 490-491: ledcAttach del PWM de motores a 5 kHz y 8 bits.
+  Linea 492: parar motores.
+  Lineas 494-495: interrupciones de los encoders (RISING).
+  Linea 497: initMPU().
+  Lineas 499-504: cero del gyro: 40 lecturas con el robot quieto, promedio,
+    se guarda en gyroBias.
+  Lineas 507-508: tOdo y tGyro = millis().
+  Linea 510: conectarWiFi().
+  Lineas 511-512: setInsecure() una sola vez por cliente TLS.
+  Linea 513: descartar comandos viejos.
+  Lineas 514-515: crear las dos tareas de red.
+  Linea 517: primera medicion del frente.
+  Lineas 518-520: reinicia contadores e imprime "Listo".
+
+================================================================================
+14. LOOP PRINCIPAL (LINEAS 523-605)
+================================================================================
+
+  Linea 524: atenderSerial() -> comandos por USB.
+  Linea 525: leerGas() -> filtro de gas.
+  Linea 526: actualizarLED().
+
+  Lineas 528-532: si hay gas y moviendo, corta: moviendo=false, parar(),
+    mensaje "GAS: robot detenido". Unica parada normal permitida.
+
+  SI moviendo (lineas 534-582):
+    - Lineas 535-540: ODOMETRIA POR ENCODERS (ver seccion 15).
+    - Linea 542: medirFrente().
+    - Lineas 543-546: alterna la lectura del sensor izquierdo y derecho
+      (uno por ciclo, para no saturar el bus).
+    - Lineas 548-551: si bumper pulsado o frente < 50 cm -> esquivar() y
+      reiniciar tOdo.
+    - Lineas 552-560: si no hay obstaculo, avanzar con correccion suave:
+        corr = (de - li) * 0.25, limitado a +-30.
+        Si el izquierdo ve menos, corr positivo -> mas velocidad a la
+        izquierda -> el robot girar hacia la derecha, alejandose del lado
+        cercano.
+        motores(190 + corr, 190 - corr).
+    - Lineas 562-571: integra gyroZ para actualizar theta (rumbo del mapa).
+    - Lineas 573-581: ODOMETRIA POR TIEMPO (ver seccion 15).
+
+  SI NO moviendo (lineas 583-602):
+    - Linea 584: parar().
+    - Lineas 587-594: re-cero del gyro con el robot quieto: promedia 5 muestras
+      y actualiza gyroBias para evitar deriva.
+    - Lineas 595-601: cada 500 ms actualiza los tres sensores.
+
+  Linea 604: delay(15) -> ciclo de ~60 Hz.
+
+================================================================================
+15. ODOMETRIA: LINEAS EXACTAS Y EXPLICACION DETALLADA
+================================================================================
+
+La odometria es la estimacion de la posicion (x, y) y el rumbo (theta) del
+robot integrando el movimiento de las ruedas. Corresponde a la Seccion 13.4
+"Odometry" del libro Modern Robotics (paginas 548-550 del libro, paginas
+568-570 del PDF), especialmente la ecuacion 13.34 para traccion diferencial.
+
+---------- 15.1 Variables implicadas ----------
+
+  Linea 71:  float theta = 0.0f;              -> rumbo en radianes
+  Linea 77:  volatile long encIzq, encDer;    -> contadores de pulsos (ISR)
+  Linea 78:  long prevIzq, prevDer;           -> ultima lectura de contadores
+  Linea 79:  float x = 0.0f, y = 0.0f;        -> posicion en METROS
+  Linea 81:  unsigned long tOdo;              -> marca de tiempo de odometria
+  Linea 54:  const float CM_POR_SEG = 25.0f;  -> cm/s a PWM 190
+
+  ISR, lineas 470-471:
+    void IRAM_ATTR isrEncIzq() { encIzq++; }
+    void IRAM_ATTR isrEncDer() { encDer++; }
+    Se ejecutan automaticamente en cada flanco ascendente de los encoders.
+
+  Sincronizacion, lineas 293-294 (dentro de iniciar()):
+    prevIzq = encIzq;  prevDer = encDer;
+    Evita contar como movimiento los pulsos ocurridos mientras estaba quieto.
+
+---------- 15.2 ODOMETRIA POR ENCODERS (lineas 535-540) ----------
+
+Codigo literal:
+
+  535: long ei = encIzq, ed = encDer;
+  536: float d = ((ei - prevIzq) + (ed - prevDer)) * 0.5f
+  537:           * (2.0f * PI * 0.03f / 20.0f);
+  537: prevIzq = ei;
+  538: prevDer = ed;
+  539: x += d * cos(theta);
+  540: y += d * sin(theta);
+
+Explicacion paso a paso:
+
+  (ei - prevIzq) = pulsos del encoder izquierdo desde el ciclo anterior.
+  (ed - prevDer) = pulsos del encoder derecho desde el ciclo anterior.
+
+  Se SUMA n el promedio de ambos lados: el robot es diferencial, asi que
+  la distancia del centro del chasis es la media de las dos ruedas:
+
+      d_rueda = (Delta_izq + Delta_der) / 2
+
+  El factor (2 * PI * 0.03 / 20) convierte pulsos a METROS:
+      - radio de la rueda = 0.03 m (3 cm)
+      - circunferencia = 2 * PI * 0.03 = 0.1885 m por vuelta
+      - 20 pulsos por vuelta
+      - metros por pulso = 0.1885 / 20 = 0.00942 m  (0.942 cm/pulso)
+
+  Por tanto: d = pulsos_promedio * 0.00942 metros.
+
+  Lineas 539-540 proyectan ese avance sobre el rumbo:
+      x += d * cos(theta)
+      y += d * sin(theta)
+  Si theta = 0, todo el avance va en +x. Si theta = PI/2, va en +y.
+  Es exactamente la idea de la ecuacion 13.34 (Vb = F * Delta_theta) seguida
+  de la integracion q(k+1) = q(k) + Delta_q de las paginas 549-550.
+
+  IMPORTANTE: theta NO se calcula con los encoders, sino con el giroscopio
+  (lineas 562-571 y 204/237). El libro recomienda justamente complementar la
+  odometria con otros sensores porque el error se acumula.
+
+---------- 15.3 RUMBO CON GIROSCOPIO (lineas 562-571) ----------
+
+Codigo literal:
+
+  564: if (leerGyroZ()) {
+  565:   unsigned long ahora = millis();
+  566:   float dtg = (ahora - tGyro) / 1000.0f;
+  567:   tGyro = ahora;
+  568:   if (dtg > 0.0f && dtg < 0.3f) theta += (gyroZ - gyroBias) * dtg;
+  569: }
+  570: while (theta >  PI) theta -= 2 * PI;
+  571: while (theta < -PI) theta += 2 * PI;
+
+  - dtg es el tiempo desde la ultima lectura, en segundos.
+  - gyroZ - gyroBias quita la deriva en reposo.
+  - Se integra: theta += velocidad_angular * tiempo.
+  - Se descartan saltos mayores a 0.3 s (por ejemplo despues de un HTTP que
+    bloqueo el loop) para no introducir un salto falso.
+  - Las lineas 570-571 mantienen theta en el rango [-PI, PI].
+
+  tGyro se reinicia al terminar cada giro (lineas 203 y 236) y en setup
+  (linea 508), para que el tiempo del giro no se cuente como avance.
+
+---------- 15.4 ODOMETRIA POR TIEMPO (lineas 573-581) ----------
+
+Codigo literal:
+
+  575: float dt = (millis() - tOdo) / 1000.0f;
+  576: tOdo = millis();
+  577: if (dt > 0.0f && dt < 0.3f) {
+  578:   float paso = (CM_POR_SEG / 100.0f) * dt;
+  579:   x += paso * cos(theta);
+  580:   y += paso * sin(theta);
+  581: }
+
+  - dt es el tiempo desde la ultima actualizacion, en segundos.
+  - CM_POR_SEG = 25 cm/s; se divide entre 100 para pasar a METROS/s.
+  - paso = 0.25 * dt metros es la distancia estimada.
+  - Se proyecta sobre theta igual que con los encoders.
+  - Se ignoran dt > 0.3 s para no contar distancia durante un bloqueo.
+
+  Esta odometria se introdujo porque los encoders no reportaban de forma
+  confiable: con esta estimacion el mapa muestra el recorrido aunque los
+  contadores queden en cero.
+
+---------- 15.5 REPORTAR AL MAPA ----------
+
+  Lineas 373-374 de enviarTelemetria():
+    x_cm = x * 100.0f
+    y_cm = y * 100.0f
+  La app recibe centimetros y dibuja la ruta con esos valores.
+
+---------- 15.6 OBSERVACION IMPORTANTE ----------
+
+  Las dos odometrias (15.2 y 15.4) están activas al mismo tiempo cuando el
+  robot avanza: ambas suman a x e y. Si los encoders funcionaran, la
+  distancia se contaria DOS veces. En la practica los encoders no estan
+  reportando (d = 0), por eso solo aporta la odometria por tiempo y el mapa
+  se ve correcto. Si se conectan los encoders, conviene desactivar una de
+  las dos o convertir la de tiempo en un respaldo condicional.
+
+================================================================================
+16. OBSERVACIONES Y POSIBLES MEJORAS
+================================================================================
+
+1) Doble odometria activa (ver 15.6): riesgo de duplicar distancia si los
+   encoders empiezan a contar.
+
+2) T_TELEMETRIA y T_COMANDOS (lineas 60-61) ya no se usan: la frecuencia la
+   marcan vTaskDelay en las tareas. Se pueden eliminar para evitar confusion.
+
+3) El comentario de las lineas 1-10 dice "Sin giroscopio", pero el codigo si
+   usa el MPU6050 para giros y rumbo. Conviene actualizar el comentario.
+
+4) Los comandos por USB y por Supabase comparten ejecutarComando(), asi que
+   "alto" puede frenar el robot incluso durante un giro, porque girar()
+   llama a atenderSerial() dentro de su bucle.
+
+5) La alarma de gas detiene el robot (lineas 528-532). Para reanudarlo hay
+   que enviar "ini" de nuevo; no se reanuda automaticamente al limpiar el aire.
+
+================================================================================
+FIN DEL REPORTE
+================================================================================
