@@ -1,0 +1,971 @@
+================================================================================
+GUIA DE ESTUDIO: CODIGO LINEA POR LINEA
+Firmware: D:\programa Robot Carr\RMA_3S_Mapa\RMA_3S_Mapa.ino (605 lineas)
+App movil: D:\RobotApp\src\... (React Native / TypeScript)
+================================================================================
+
+INDICE
+  PARTE I - FIRMWARE ESP32
+    1.  Lineas 1-30    : cabecera, librerias y secretos
+    2.  Lineas 32-82   : pines, constantes y variables de estado
+    3.  Lineas 84-104  : giroscopio MPU6050
+    4.  Lineas 106-119 : motores
+    5.  Lineas 121-148 : ultrasónicos
+    6.  Lineas 150-171 : gas MQ-2
+    7.  Lineas 173-279 : movimiento y evasión
+    8.  Lineas 281-286 : LED
+    9.  Lineas 288-337 : comandos
+    10. Lineas 339-444 : Supabase
+    11. Lineas 446-467 : tareas FreeRTOS
+    12. Lineas 469-521 : setup()
+    13. Lineas 523-605 : loop()
+  PARTE II - APP MOVIL (POST y GET a Supabase)
+    14. src/lib/supabase.ts (lineas 1-10)
+    15. src/config.ts
+    16. src/hooks/useRobotData.ts - EL GET (lineas 92-109)
+    17. src/screens/DashboardScreen.tsx - EL POST (lineas 41-51)
+    18. Flujo completo de datos
+
+
+================================================================================
+PARTE I - FIRMWARE ESP32
+================================================================================
+
+--------------------------------------------------------------------------------
+1. LINEAS 1-30: CABECERA, LIBRERIAS Y SECRETOS
+--------------------------------------------------------------------------------
+
+Linea 1:  /* =========================================================
+          Inicia un comentario de bloque. Todo lo que este entre /* y */ no se
+          ejecuta; solo documenta.
+Linea 2:     ROBOT AUTONOMO ESP32 - VERSION SIMPLE
+          Titulo del comentario.
+Linea 4:     Avanza con los motores. Si el frente mide menos de 50 cm:
+          Describe la logica principal.
+Linea 9:     Sin giroscopio, sin calibraciones, sin PID.
+          OJO: este comentario esta desactualizado. El codigo SI usa el
+          giroscopio (lineas 84-104 y 562-571). Es un error del texto,
+          no del programa.
+Linea 10:   ========================================================= */
+          Cierra el comentario.
+
+Linea 12: #include <WiFi.h>
+          "Incluye" la libreria WiFi del ESP32. Es equivalente a pegar aqui
+          todo el codigo de esa libreria antes de compilar.
+Linea 13: #include <WiFiMulti.h>
+          Libreria para registrar varias redes y conectarse a la disponible.
+Linea 14: #include <WiFiClientSecure.h>
+          Cliente TCP con TLS (cifrado HTTPS). Necesario para Supabase.
+Linea 15: #include <HTTPClient.h>
+          Libreria de alto nivel: permite http.POST(), http.GET(), etc.
+Linea 16: #include <Wire.h>
+          Bus I2C. Se usa para hablar con el MPU6050 (direccion 0x68).
+Linea 17: #include "esp_system.h"
+          API del sistema ESP32. De aqui sale esp_reset_reason() (linea 477).
+
+Linea 19: #if __has_include("secrets.h")
+          Directiva del PREPROCESADOR. Se evalua ANTES de compilar. Pregunta:
+          "¿existe el archivo secrets.h en esta carpeta?"
+Linea 20:   #include "secrets.h"
+          Si existe, se incluye: trae REDES_WIFI, SUPABASE_URL, SUPABASE_CMD_URL,
+          SUPABASE_CMD_URL_BASE y SUPABASE_KEY con los valores reales.
+Linea 21: #else
+          Si NO existe, entra al bloque alternativo.
+Linea 22:   #warning "Falta secrets.h..."
+          Emite un aviso al compilar, pero NO detiene la compilacion.
+Linea 23:   struct RedWiFi { const char* ssid; const char* pass; };
+          Define un "struct" (tipo de dato) con dos campos de texto:
+          ssid (nombre de red) y pass (contraseña).
+Linea 24:   const RedWiFi REDES_WIFI[] = {{"", ""}};
+          Crea un array de una sola red, vacia.
+Linea 25:   const int NUM_REDES_WIFI = 0;
+          Cero redes => el WiFi no intenta conectar.
+Linea 26-29: const char* SUPABASE_URL = ""; etc.
+          Variables vacias para que el codigo compile igual.
+Linea 30: #endif
+          Cierra el condicional.
+
+          IDEA CLAVE: secrets.h no se sube al repositorio. Asi cualquiera puede
+          compilar el codigo de GitHub sin ver las contraseñas.
+
+--------------------------------------------------------------------------------
+2. LINEAS 32-82: PINES, CONSTANTES Y ESTADO
+--------------------------------------------------------------------------------
+
+Linea 33: const int EN_DER = 4, IN1 = 12, IN2 = 14;  // motor derecho
+          EN_DER = pin Enable: recibe PWM (0-255) = velocidad.
+          IN1/IN2 = pines de sentido. IN1 HIGH + IN2 LOW = gira adelante;
+          IN1 LOW + IN2 HIGH = gira atras; ambos igual = freno.
+Linea 34: const int EN_IZQ = 15, IN3 = 33, IN4 = 32;
+          Igual para el motor izquierdo.
+
+Linea 35: TRIG_F = 5, ECHO_F = 18;   // sensor frontal
+          Cada HC-SR04 tiene Trig (dispara pulso) y Echo (recibe eco).
+Linea 36: TRIG_L = 17, ECHO_L = 16;  // sensor izquierdo
+Linea 37: TRIG_R = 25, ECHO_R = 34;  // sensor derecho
+          El GPIO 34 es SOLO entrada, por eso se usa como Echo y no como Trig.
+Linea 38: BTN_F = 26;   // bumper frontal (con pull-up: LOW = pulsado)
+Linea 39: MQ2_DO = 23, MQ2_AO = 36;  // salida digital y analogica del gas
+Linea 40: LED = 2;      // LED azul integrado en la placa ESP32
+Linea 41: ENC_IZQ = 19, ENC_DER = 13; // encoders (un canal por rueda)
+
+Linea 43: const uint8_t MPU_ADDR = 0x68;
+          Direccion I2C del MPU6050. uint8_t = entero de 8 bits sin signo.
+Linea 44: float gyroZ = 0.0f;
+          Velocidad angular actual en rad/s. La "f" indica que es float.
+Linea 45: float gyroBias = 0.0f;
+          Valor que lee el gyro cuando el robot esta quieto. Se resta para
+          quitar la deriva (un gyro real nunca marca exactamente 0 en reposo).
+Linea 46: unsigned long tGyro = 0;
+          Instante (milisegundos) de la ultima lectura del gyro.
+
+Linea 49: const int VEL_AVANCE = 190;
+          PWM de avance. 190 de 255 = 75% de potencia.
+Linea 50: const int VEL_GIRO = 170;
+          PWM cuando el robot gira sobre su eje.
+Linea 51: DIST_OBSTACULO = 50.0f;
+          Si el frente mide menos de 50 cm, se dispara la evasion.
+Linea 52: DIST_LIBRE = 300.0f;
+          Valor que se usa cuando el sensor no recibe eco ("via libre").
+Linea 54: CM_POR_SEG = 25.0f;
+          Velocidad estimada del robot a PWM 190. Se usa para la odometria
+          por tiempo (linea 578). Es una estimacion, no una medicion.
+
+Linea 56: // Si al avanzar gira en circulos, cambia UNO a -1
+Linea 57: const int SENTIDO_IZQ = 1;
+Linea 58: const int SENTIDO_DER = 1;
+          Multiplicadores manuales de polaridad. Si un motor esta cableado
+          al reves, se cambia solo uno a -1. Esto reemplazo a una antigua
+          autocalibracion que fallaba porque no detectaba el giro.
+
+Linea 60: T_TELEMETRIA = 2000;
+Linea 61: T_COMANDOS = 2000;
+          ATENCION: ya no se usan. La frecuencia la marcan las tareas
+          FreeRTOS (lineas 449-467). Quedaron como referencia historica.
+Linea 62: T_HTTP = 3000;
+          Timeout de 3 s para las peticiones HTTPS. Si tarda mas, aborta.
+
+Linea 65: WiFiMulti wifi;
+          Objeto que gestiona varias redes WiFi.
+Linea 66: // Un cliente TLS por tarea...
+Linea 67: WiFiClientSecure tlsTel;
+          Cliente cifrado EXCLUSIVO para enviar telemetria.
+Linea 68: WiFiClientSecure tlsCmd;
+          Cliente cifrado EXCLUSIVO para consultar comandos.
+          Dos clientes separados porque compartir uno hacia que cada
+          ciclo de POST+GET tardara ~3 s y la telemetria no llegara cada 1 s.
+
+Linea 70: bool moviendo = false;
+          Bandera "el robot debe estar en marcha". Arranca en falso.
+Linea 71: float theta = 0.0f;
+          Rumbo estimado en radianes. 0 = direccion que tenia al arrancar.
+Linea 72: float dFrente = 0, dIzq = 0, dDer = 0;
+          Distancias de los tres ultrasónicos, en cm.
+Linea 74: bool gas = false, gasCorte = true, doUtil = false;
+          gas = alarma activa; gasCorte = si el gas debe frenar el robot;
+          doUtil = el pin DO ya se vio en LOW (confirmacion de que esta conectado).
+Linea 75: float ppm = 0;
+          Estimacion de concentracion para la app.
+Linea 77: volatile long encIzq = 0, encDer = 0;
+          Contadores de pulsos de encoder. "volatile" le dice al compilador
+          que pueden cambiar desde una interrupcion y que no los optimice.
+Linea 78: long prevIzq = 0, prevDer = 0;
+          Ultimo valor leido de esos contadores. Sirve para calcular
+          cuantos pulsos nuevos hubo (linea 536).
+Linea 79: float x = 0.0f, y = 0.0f;
+          Posicion estimada en METROS. La telemetria la pasa a cm (linea 373).
+Linea 81: unsigned long tTelemetria = 0, tComandos = 0, tOdo = 0;
+          Marcas de tiempo para calcular diferencias (dt).
+Linea 82: int resetReason = 0;
+          Motivo del reinicio: 1 = encendido normal, 9 = brownout (bajada de
+          voltaje). Se lee en la linea 477.
+
+--------------------------------------------------------------------------------
+3. LINEAS 84-104: GIROSCOPIO MPU6050
+--------------------------------------------------------------------------------
+
+Linea 85: void initMPU() {
+          Define una funcion que no devuelve nada.
+Linea 86:   Wire.begin();
+          Arranca el bus I2C (los pines SDA/SCL del ESP32).
+Linea 87:   Wire.setTimeOut(100);
+          Si una comunicacion I2C tarda mas de 100 ms, se aborta.
+Linea 88:   Wire.beginTransmission(MPU_ADDR);
+          Inicia una transmision hacia el dispositivo 0x68.
+Linea 89:   Wire.write(0x6B); Wire.write(0x00);  // despertar
+          Escribe 0 en el registro 0x6B (POWER_MGMT). El MPU6050 arranca
+          dormido; esto lo despierta.
+Linea 90:   Wire.endTransmission(true);
+          Cierra la transmision.
+Linea 91:   Wire.beginTransmission(MPU_ADDR);
+Linea 92:   Wire.write(0x1B); Wire.write(0x08);  // +-500 dps
+          Registro 0x1B = FS_SEL (escala del giroscopio). 0x08 = +-500 grados
+          por segundo. Con esa escala, 32768 cuentas = 500 °/s.
+Linea 93:   Wire.endTransmission(true);
+Linea 94: }
+          Fin de initMPU().
+
+Linea 96: bool leerGyroZ() {
+          Funcion que devuelve true/false segun la lectura.
+Linea 97:   Wire.beginTransmission(MPU_ADDR);
+Linea 98:   Wire.write(0x47);   // GYRO_ZOUT_H
+          Apunta al registro 0x47: byte ALTO del giro en el eje Z.
+Linea 99:   if (Wire.endTransmission(false) != 0) return false;
+          El "false" significa repeated-start: envia la direccion pero no
+          suelta el bus. Si devuelve distinto de 0, hubo error y sale.
+Linea 100:  if (Wire.requestFrom((uint8_t)MPU_ADDR, (uint8_t)2) != 2) return false;
+          Pide 2 bytes. Si no llegan exactamente 2, fallo.
+Linea 101:  int16_t raw = (Wire.read() << 8) | Wire.read();
+          Lee byte alto, lo desplaza 8 bits a la izquierda, y le hace OR con
+          el byte bajo. Resultado: entero de 16 bits CON SIGNO (puede ser
+          negativo si el giro es hacia el otro lado).
+Linea 102:  gyroZ = (raw / 65.5f) * DEG_TO_RAD;
+          65.5 = cuentas por grado/segundo (32768/500). Luego DEG_TO_RAD
+          (macro = pi/180) convierte grados/s a radianes/s.
+Linea 103:  return true;
+          Lectura correcta.
+Linea 104: }
+          Fin.
+
+--------------------------------------------------------------------------------
+4. LINEAS 106-119: MOTORES
+--------------------------------------------------------------------------------
+
+Linea 107: void motores(int izq, int der) {
+          Recibe las velocidades deseadas: positivo = adelante, negativo = atras.
+Linea 108:  izq *= SENTIDO_IZQ;
+Linea 109:  der *= SENTIDO_DER;
+          Aplica los multiplicadores de polaridad (1 o -1).
+Linea 110:  digitalWrite(IN1, der >= 0 ? HIGH : LOW);
+          Si der >= 0, IN1 va HIGH; si es negativo, LOW.
+          El operador ?: es un "if" corto: condicion ? valor_si : valor_no.
+Linea 111:  digitalWrite(IN2, der >= 0 ? LOW : HIGH);
+          El pin complementario. Juntos definen el sentido de giro.
+Linea 112:  ledcWrite(EN_DER, der >= 0 ? der : -der);
+          PWM en el pin Enable. ledcWrite solo acepta valores positivos,
+          por eso se usa el valor absoluto (-der si era negativo).
+Linea 114-116: igual para el izquierdo con IN3/IN4 y EN_IZQ.
+Linea 117: }
+Linea 119: void parar() { motores(0, 0); }
+          Funcion de una linea: ambos motores a 0. No hay rampa: es una
+          parada inmediata, importante cuando salta la alarma de gas.
+
+--------------------------------------------------------------------------------
+5. LINEAS 121-148: ULTRASONIDOS
+--------------------------------------------------------------------------------
+
+Linea 122: float medir(int trig, int echo) {
+          Mide una distancia con un sensor. Recibe sus pines.
+Linea 123:  digitalWrite(trig, LOW);  delayMicroseconds(3);
+          Estabiliza el pin en bajo 3 microsegundos.
+Linea 124:  digitalWrite(trig, HIGH); delayMicroseconds(10);
+          Pulso de disparo de 10 us. El HC-SR04 lo necesita para medir.
+Linea 125:  digitalWrite(trig, LOW);
+          Termina el pulso.
+Linea 126:  unsigned long us = pulseIn(echo, HIGH, 18000UL);
+          Mide cuanto tiempo el pin Echo esta en HIGH. 18000UL = timeout de
+          18 ms (equivalente a ~3 metros). Si no hay eco, devuelve 0.
+Linea 127:  if (us == 0) return 0.0f;  // sin eco = via libre
+          IMPORTANTE: 0 NO significa "obstaculo pegado", significa "no vi nada".
+Linea 128:  return us * 0.0343f / 2.0f;
+          0.0343 cm/us es la velocidad del sonido (343 m/s). Se divide
+          entre 2 porque el sonido va hasta el objeto y vuelve.
+Linea 129: }
+
+Linea 131: float medirFrente() {
+Linea 132:  float v[3]; int n = 0;
+          Array para 3 muestras y contador de muestras validas.
+Linea 133:  for (int i = 0; i < 3; i++) {
+          Tres intentos.
+Linea 134:    float d = medir(TRIG_F, ECHO_F);
+Linea 135:    if (d > 2.0f) v[n++] = d;
+          Descarta mediciones <= 2 cm (ruido del propio sensor).
+Linea 136:    delay(6);
+          Pausa de 6 ms entre ecos para que no se mezclen.
+Linea 137:  }
+Linea 138:  if (n == 0) return DIST_LIBRE;
+          Si ninguna muestra sirvio, devuelve 300 (via libre).
+Linea 139-141: doble bucle que ordena v[] de menor a mayor (metodo burbujeo).
+          if (v[j] < v[i]) { float t = v[i]; v[i] = v[j]; v[j] = t; }
+          Intercambia dos valores usando t como variable temporal.
+Linea 142:  return v[n / 2];
+          Devuelve la MEDIANA. Un eco espurio aislado no afecta la mediana.
+Linea 143: }
+
+Linea 145: float medirLado(int trig, int echo) {
+Linea 146:  float d = medir(trig, echo);
+Linea 147:  return (d > 2.0f) ? d : 0.0f;
+          Una sola muestra; si es <= 2 cm devuelve 0.
+Linea 148: }
+
+--------------------------------------------------------------------------------
+6. LINEAS 150-171: GAS MQ-2
+--------------------------------------------------------------------------------
+
+Linea 151: void leerGas() {
+Linea 152:  static unsigned long tMuestra = 0;
+          "static" = la variable conserva su valor entre llamadas. Es un
+          temporizador privado de esta funcion.
+Linea 153:  static uint32_t histDO = 0;
+          Registro de 32 bits con el historial de las ultimas 24 lecturas.
+Linea 154:  unsigned long ahora = millis();
+          Tiempo actual desde que se encendio el ESP32.
+Linea 155:  if (ahora - tMuestra < 50) return;
+          Si no pasaron 50 ms, sale. Asi se muestrea a 20 Hz.
+Linea 156:  tMuestra = ahora;
+          Actualiza el temporizador.
+Linea 158:  int nivelDO = digitalRead(MQ2_DO);
+          Lee la salida digital (GPIO 23). HIGH o LOW.
+Linea 159:  float v = analogRead(MQ2_AO) * (3.3f / 4095.0f);
+          Lee el ADC de 12 bits (0-4095) y lo pasa a voltios (0-3.3 V).
+          En este modulo el AO esta desconectado y da 0 V.
+Linea 160:  ppm = (v - 0.8f) * 800.0f;
+          Estimacion lineal para la app. Con v=0 da negativo.
+Linea 161:  if (ppm < 0.0f) ppm = 0.0f;
+          Satura el minimo en 0.
+Linea 162:  if (ppm > 9999.0f) ppm = 9999.0f;
+          Satura el maximo en 9999.
+Linea 163:  if (nivelDO == LOW) doUtil = true;
+          Si alguna vez vio LOW, confirma que el pin esta conectado. Si
+          estuviera al aire, el pull-up lo mantendria siempre en HIGH.
+Linea 165:  histDO = (histDO << 1) | (nivelDO == HIGH ? 1UL : 0UL);
+          Desplaza todos los bits un lugar a la izquierda y mete el nuevo
+          valor al final. Es un registro de desplazamiento de 24 muestras.
+Linea 166:  uint8_t altos = 0;
+          Contador de bits en HIGH.
+Linea 167:  for (int i = 0; i < 24; i++) altos += (histDO >> i) & 1UL;
+          Recorre los 24 bits cortando con &: (histDO >> i) & 1 da 1 o 0.
+          Suma cuantos estan en HIGH.
+Linea 169:  if (doUtil && altos >= 20) gas = true;
+          Alarma solo con 20 de 24 muestras en HIGH (1.2 s). Filtro por
+          mayoria: descarta los pulsos falsos del pico de corriente de motores.
+Linea 170:  else if (altos <= 2) gas = false;
+          Se libera cuando 22 o mas de 24 estan en LOW. Histeresis.
+Linea 171: }
+
+--------------------------------------------------------------------------------
+7. LINEAS 173-279: MOVIMIENTO Y EVASION
+--------------------------------------------------------------------------------
+
+Linea 174: void atenderSerial();
+          Declaracion anticipada ("prototipo"). Avisa que esa funcion existe
+          mas abajo, para poder llamarla desde girar().
+
+Linea 176-177: comentario: gira hasta que el MPU marque el angulo.
+
+Linea 178: void girar(int grados) {
+Linea 179:  if (abs(grados) < 5) return;
+          Ignora giros menores a 5 grados (no valen el esfuerzo).
+Linea 180:  float objetivo = abs(grados) * DEG_TO_RAD;
+          Angulo objetivo en radianes (abs = valor absoluto).
+Linea 181:  float acum = 0.0f;
+          Acumulador del giro medido.
+Linea 182:  unsigned long t0 = millis(), tp = t0;
+          Inicio del giro y marca anterior para integrar.
+Linea 183:  unsigned long tope = abs(grados) * 22UL + 800UL;
+          Tope de seguridad: 22 ms por grado + 800 ms. Si el giroscopio
+          falla, el bucle termina igual.
+Linea 185:  if (grados > 0) motores(-VEL_GIRO, VEL_GIRO);
+          Giro a la izquierda: motor izquierdo atras, derecho adelante.
+Linea 186:  else            motores(VEL_GIRO, -VEL_GIRO);
+          Giro a la derecha: al revés.
+Linea 188:  while (millis() - t0 < tope) {
+          Mientras no venza el tiempo tope.
+Linea 189:    if (leerGyroZ()) {
+Linea 190:      unsigned long ahora = millis();
+Linea 191:      acum += gyroZ * (ahora - tp) / 1000.0f;
+          Integra: velocidad angular * tiempo = angulo recorrido.
+          (ahora - tp) esta en ms, se divide entre 1000 para pasar a segundos.
+Linea 192:      tp = ahora;
+          Actualiza la marca para el proximo ciclo.
+Linea 193:    }
+Linea 194:    if (fabs(acum) >= objetivo) break;
+          fabs = valor absoluto de float. Si ya giro lo pedido, sale.
+Linea 195:    atenderSerial();
+          Revisa comandos por USB (para poder frenar con "alto").
+Linea 196:    leerGas();
+          Revisa el gas.
+Linea 197:    if (gas && gasCorte) break;
+          Si hay alarma, corta el giro.
+Linea 198:    if (!moviendo) break;
+          Si alguien mando "alto", tambien corta.
+Linea 199:    delay(5);
+          Pausa de 5 ms (~200 Hz de integracion).
+Linea 200:  }
+Linea 201:  parar();
+          Para los motores.
+Linea 202:  delay(40);
+          pequeña pausa para que el chasis se estabilice.
+Linea 203:  tGyro = millis();
+          Reinicia la marca del gyro para no contar el giro como avance.
+Linea 204:  theta += grados * DEG_TO_RAD;
+          Actualiza el rumbo con el angulo MANDADO (no el medido).
+Linea 205-206: while (theta > PI) theta -= 2*PI; etc.
+          Mantiene theta entre -pi y +pi (una vuelta completa).
+Linea 207: }
+
+Linea 212: void girarHastaDespejar(int sentido) {
+          Parecido a girar(), pero gira hasta que el frente este libre.
+Linea 216-217: motores opuestos segun el sentido.
+Linea 219:  while (millis() - t0 < 3500UL) {
+          Tope de 3.5 s.
+Linea 222:  acum += (gyroZ - gyroBias) * (ahora - tp) / 1000.0f;
+          Integra con el bias corregido (mas preciso que en girar()).
+Linea 227-228: if (fabs(acum) > 12.0f * DEG_TO_RAD &&
+               medirFrente() > DIST_OBSTACULO * 1.8f) break;
+          Condicion de salida: lleva mas de 12 grados girados (para no creer
+          un eco pendiente) Y el frente ve mas de 90 cm (50 * 1.8).
+Linea 229-232: atenderSerial, leerGas, frenar si gas/alto, delay(8).
+Linea 234:  parar();
+Linea 236:  tGyro = millis();
+Linea 237:  theta += acum;
+          AQUI theta se actualiza con el angulo REAL medido, a diferencia
+          de girar() que usa el mandado.
+Linea 240: }
+
+Linea 245: void esquivar() {
+Linea 246:  parar();
+          Primero detiene el robot.
+Linea 249:  delay(60);
+Linea 250:  if (medirFrente() > DIST_OBSTACULO) return;
+          Vuelve a medir: si ya esta libre, era un falso eco y sale sin girar.
+Linea 252:  float li = (dIzq > 0.0f) ? dIzq : DIST_LIBRE;
+          Si el sensor izquierdo dio 0 (sin eco), lo trata como 300 (libre).
+Linea 253:  float de = (dDer > 0.0f) ? dDer : DIST_LIBRE;
+          Igual para el derecho.
+Linea 255:  if (li > 70.0f || de > 70.0f) {
+          Si algun lado esta despejado...
+Linea 256:    if (li > de + 10.0f) girarHastaDespejar(1);
+          ...si el izquierdo supera al derecho por 10 cm, gira a la izquierda.
+Linea 257:    else if (de > li + 10.0f) girarHastaDespejar(-1);
+          ...si el derecho es mejor, gira a la derecha.
+Linea 258-259: desempate: si ambos estan libres, prefiere izquierda; si no, derecha.
+Linea 260:  Serial.printf(...);
+          Imprime por USB las distancias para depuracion.
+Linea 261:  return;
+          Termina la evasion rapida.
+Linea 264:  // Los dos lados tapados: barrido...
+Linea 265:  Serial.println("Barrido 360");
+Linea 266:  float mejorDist = medirFrente();
+          Distancia inicial como mejor candidata.
+Linea 267:  int mejorPaso = 0;
+          En que paso estaba el mejor rumbo.
+Linea 268:  for (int i = 1; i <= 8; i++) {
+          Ocho pasos de 45 grados = 360 grados.
+Linea 269:    girar(45);
+Linea 270:    if (!moviendo || (gas && gasCorte)) return;
+          Sale si lo frenaron.
+Linea 271:    float d = medirFrente();
+Linea 272:    if (d > mejorDist) { mejorDist = d; mejorPaso = i; }
+          Guarda el mejor.
+Linea 273:  }
+Linea 274:  int giro = mejorPaso * 45;
+          Angulo del mejor rumbo.
+Linea 275:  if (giro > 180) giro -= 360;
+          Lo convierte al camino corto (ejemplo: 270 -> -90).
+Linea 276:  if (mejorDist < 30.0f) girar(180);
+          Si todo esta cerrado, media vuelta.
+Linea 277:  else if (giro != 0) girar(giro);
+          Si no, gira hacia el mejor hueco.
+Linea 278:  Serial.printf("Evasion: mejor %.0f cm, paso %d\n", ...);
+Linea 279: }
+
+--------------------------------------------------------------------------------
+8. LINEAS 281-286: LED
+--------------------------------------------------------------------------------
+
+Linea 282: unsigned long t = millis();
+Linea 283: if (gas) digitalWrite(LED, (t / 150) % 2);
+          Con gas: parpadeo rapido. (t/150)%2 alterna 0 y 1 cada 150 ms.
+Linea 284: else if (moviendo) digitalWrite(LED, HIGH);
+          En marcha: LED fijo encendido.
+Linea 285: else digitalWrite(LED, (t / 800) % 2);
+          En reposo: latido lento de 800 ms.
+
+--------------------------------------------------------------------------------
+9. LINEAS 288-337: COMANDOS
+--------------------------------------------------------------------------------
+
+Linea 289: void iniciar() {
+Linea 290:  parar();
+Linea 291:  delay(100);
+Linea 292:  theta = 0.0f;
+          Reinicia el rumbo: la direccion actual se considera 0.
+Linea 293:  prevIzq = encIzq;
+Linea 294:  prevDer = encDer;
+          Sincroniza los contadores para no contar pulsos viejos como avance.
+Linea 295:  moviendo = true;
+          Activa el movimiento.
+Linea 296:  Serial.println("ACK:INI");
+          Confirma por USB.
+Linea 297: }
+
+Linea 299: void ejecutarComando(String cmd) {
+Linea 300:  cmd.trim();
+          Quita espacios al inicio y final.
+Linea 301:  cmd.toLowerCase();
+          Todo a minusculas para comparar sin importar mayusculas.
+Linea 303:  if (cmd == "ini" || cmd == "start") iniciar();
+Linea 305:  else if (cmd == "alto" || cmd == "stop") { moviendo=false; parar(); }
+Linea 309:  else if (cmd == "ping") Serial.println("ACK:PONG");
+Linea 311:  else if (cmd == "gasoff") { gasCorte=false; gas=false; }
+Linea 314:  else if (cmd == "gason") gasCorte=true;
+Linea 317:  else if (cmd == "mq2") Serial.printf(...);  // estado del sensor
+Linea 322:  else Serial.println("ERR:CMD " + cmd);
+          Comando desconocido.
+Linea 325: }
+
+Linea 327: void atenderSerial() {
+Linea 328:  static String buf = "";
+          Buffer acumulador (conserva entre llamadas).
+Linea 329:  while (Serial.available()) {
+          Mientras haya caracteres recibidos...
+Linea 330:    char c = (char)Serial.read();
+          Lee uno.
+Linea 331:    if (c == '\n' || c == '\r') {
+          Fin de linea = comando completo.
+Linea 332:      if (buf.length()) ejecutarComando(buf);
+Linea 333:      buf = "";
+          Limpia el buffer.
+Linea 334:    } else if (buf.length() < 32) buf += c;
+          Acumula caracteres (maximo 32).
+Linea 335:    else buf = "";
+          Si se pasa, descarta todo.
+Linea 337: }
+
+--------------------------------------------------------------------------------
+10. LINEAS 339-444: SUPABASE (ESP32)
+--------------------------------------------------------------------------------
+
+Linea 340: void agregarCabeceras(HTTPClient &http) {
+          El "&" significa que recibe la referencia del objeto, no una copia.
+Linea 341:  http.addHeader("apikey", SUPABASE_KEY);
+Linea 342:  http.addHeader("Authorization", String("Bearer ") + SUPABASE_KEY);
+Linea 343:  http.addHeader("Content-Type", "application/json");
+Linea 344:  http.addHeader("Prefer", "return=minimal");
+          Cuatro cabeceras HTTP que exige Supabase para autenticar y evitar
+          que devuelva datos innecesarios.
+Linea 345: }
+
+Linea 347: void conectarWiFi() {
+Linea 348-349: registra cada red del secrets.h con wifi.addAP().
+Linea 351:  Serial.print("WiFi");
+Linea 352:  unsigned long t0 = millis();
+Linea 353:  while (wifi.run() != WL_CONNECTED && millis() - t0 < 20000UL) {
+          Intenta conectar hasta 20 s.
+Linea 354-355: delay(500) y un punto por pantalla.
+Linea 357-358: si conecto, imprime SSID e IP.
+Linea 360:  else Serial.println("WiFi: sin conexion");
+Linea 361: }
+
+Linea 363: void enviarTelemetria() {
+          AQUI SE HACE EL POST DESDE EL ESP32.
+Linea 364:  if (WiFi.status() != WL_CONNECTED || SUPABASE_URL[0] == '\0') return;
+          Si no hay WiFi o no hay URL, sale. ('\0' = cadena vacia).
+Linea 365:  HTTPClient http;
+          Crea el cliente HTTP.
+Linea 366:  http.setReuse(true);
+          Reutiliza la conexion TLS (evita un handshake nuevo cada vez).
+Linea 367:  http.setTimeout(T_HTTP);
+Linea 368:  if (!http.begin(tlsTel, SUPABASE_URL)) {...}
+          Abre la conexion HTTPS con el cliente de telemetria.
+Linea 369:  agregarCabeceras(http);
+Linea 371:  String body = "{";
+Linea 372:  body += "\"robot_id\":\"robot1\",";
+          Construye el JSON a mano. \" es una comilla escapada dentro de String.
+Linea 373:  body += "\"x_cm\":" + String(x * 100.0f, 1) + ",";
+          x esta en metros; se pasa a cm y con 1 decimal.
+Linea 374:  body += "\"y_cm\":" + String(y * 100.0f, 1) + ",";
+Linea 375:  body += "\"theta_rad\":" + String(theta, 2) + ",";
+Linea 376:  body += "\"front_cm\":" + String(dFrente, 1) + ",";
+Linea 377:  body += "\"left_cm\":" + String(dIzq, 1) + ",";
+Linea 378:  body += "\"right_cm\":" + String(dDer, 1) + ",";
+Linea 379:  body += "\"gas_valor\":" + String(gas ? 1 : 0) + ",";
+Linea 380:  body += "\"gas_alerta\":" + String(gas ? "true" : "false") + ",";
+Linea 381:  body += "\"gas_ppm\":" + String(ppm, 0) + ",";
+Linea 382:  body += "\"gas_do\":" + String(digitalRead(MQ2_DO) == LOW ? 0 : 1) + ",";
+Linea 383:  body += "\"uptime_ms\":" + String(millis()) + ",";
+Linea 384:  body += "\"reset_reason\":" + String(resetReason);
+Linea 385:  body += "}";
+          JSON completo cerrado.
+Linea 387:  int code = http.POST(body);
+          >>> AQUI se envia el POST a Supabase <<<
+Linea 388:  if (code != 201 && code != 200) Serial.printf("POST %d\n", code);
+          Supabase responde 201 (creado) o 200. Cualquier otro se informa.
+Linea 389:  http.end();
+          Cierra la conexion (pero setReuse la mantiene viva).
+Linea 390:  tTelemetria = millis();
+Linea 391: }
+
+Linea 393: void revisarComandos() {
+          AQUI SE HACE EL GET DESDE EL ESP32.
+Linea 394:  if (WiFi.status() != WL_CONNECTED || SUPABASE_CMD_URL[0] == '\0') return;
+Linea 398:  if (!http.begin(tlsCmd, SUPABASE_CMD_URL)) {...}
+          Usa el otro cliente TLS. La URL ya trae el filtro:
+          ?procesado=eq.false&robot_id=eq.robot1&order=id.asc&limit=1
+Linea 399-400: cabeceras de autenticacion.
+Linea 404:  if (http.GET() == 200) {
+          >>> AQUI se hace el GET <<<
+Linea 405:    String s = http.getString();
+          Respuesta JSON como texto.
+Linea 406:    int ic = s.indexOf("\"comando\":\"");
+          Busca la posicion del texto "comando":".
+Linea 407:    int ii = s.indexOf("\"id\":");
+          Busca la posicion de "id":.
+Linea 408-413: extrae el comando con substring() y el id digito a digito.
+Linea 415:  http.end();
+Linea 416:  tComandos = millis();
+Linea 418:  if (cmd.length()) ejecutarComando(cmd);
+          Ejecuta la orden recibida.
+Linea 420-430: con el id, hace un PATCH a
+          SUPABASE_CMD_URL_BASE + id marcando procesado=true, para no
+          ejecutar la misma orden dos veces.
+Linea 431: }
+
+Linea 433: void descartarComandosViejos() {
+Linea 440:  if (!http.begin(tlsCmd, base + "?procesado=eq.false")) ...
+Linea 442:  http.sendRequest("PATCH", "{\"procesado\":true}");
+          Al arrancar marca TODOS los comandos pendientes como procesados,
+          para no ejecutar ordenes atrasadas de una sesion anterior.
+Linea 444: }
+
+--------------------------------------------------------------------------------
+11. LINEAS 446-467: TAREAS FREERTOS
+--------------------------------------------------------------------------------
+
+Linea 449: void tareaTelemetria(void *param) {
+          Funcion tarea. Recibe un puntero generico (no se usa).
+Linea 450:  (void)param;
+          Evita el aviso de "parametro no usado".
+Linea 451:  for (;;) {
+          Bucle infinito.
+Linea 452:    vTaskDelay(pdMS_TO_TICKS(100));
+          Duerme 100 ms. pdMS_TO_TICKS convierte milisegundos a ticks del SO.
+Linea 453:    if (WiFi.status() == WL_CONNECTED) enviarTelemetria();
+          El POST tarda ~1 s, asi que la frecuencia real es ~1.2 s.
+Linea 455: }
+
+Linea 457: void tareaComandos(void *param) {
+Linea 460:    vTaskDelay(pdMS_TO_TICKS(1000));
+          Cada 1 s.
+Linea 461:    if (WiFi.status() == WL_CONNECTED) revisarComandos();
+Linea 462-465: si no hay WiFi, cada 30 s intenta WiFi.reconnect().
+Linea 467: }
+
+--------------------------------------------------------------------------------
+12. LINEAS 469-521: SETUP()
+--------------------------------------------------------------------------------
+
+Linea 470: void IRAM_ATTR isrEncIzq() { encIzq++; }
+          ISR = rutina de interrupcion. IRAM_ATTR la pone en memoria rapida.
+          Se ejecuta automaticamente en cada flanco ascendente del encoder.
+Linea 471: void IRAM_ATTR isrEncDer() { encDer++; }
+
+Linea 473: void setup() {
+Linea 474:  Serial.begin(115200);
+          Inicia el puerto USB a 115200 baudios.
+Linea 477:  resetReason = (int)esp_reset_reason();
+          Guarda por que reinicio (1=POWERON, 9=BROWNOUT).
+Linea 480-488: pinMode de todos los pines.
+          OUTPUT = salida; INPUT_PULLUP = entrada con resistencia interna
+          a HIGH (bumper y MQ2_DO); INPUT_PULLDOWN = resistencia a LOW
+          (encoders).
+Linea 490-491: ledcAttach(EN_DER, 5000, 8);
+          Configura PWM a 5000 Hz y 8 bits (0-255) en los pines Enable.
+Linea 492:  parar();
+          Motores detenidos al arrancar.
+Linea 494-495: attachInterrupt(... RISING);
+          Asocia las ISR a los pines de encoder, disparadas por flanco
+          ascendente (de 0 a 1).
+Linea 497:  initMPU();
+Linea 499-503: 40 lecturas del gyro con el robot quieto.
+Linea 504:  gyroBias = (nM > 20) ? suma / nM : 0.0f;
+          Promedio de las lecturas = cero del gyro. Si fallo el I2C, bias=0.
+Linea 507-508:  tOdo = millis(); tGyro = millis();
+          Inician los contadores de tiempo.
+Linea 510:  conectarWiFi();
+Linea 511-512:  tlsTel.setInsecure(); tlsCmd.setInsecure();
+          Acepta certificados sin validar. Se llama UNA SOLA VEZ (llamarlo
+          en cada POST impedia reutilizar la conexion y tardaba ~1 s mas).
+Linea 513:  descartarComandosViejos();
+Linea 514:  xTaskCreatePinnedToCore(tareaTelemetria, "telemetria", 8192, NULL, 1, NULL, 0);
+          Crea la tarea: nombre, stack de 8192 bytes, prioridad 1, pinned al
+          nucleo 0.
+Linea 515:  xTaskCreatePinnedToCore(tareaComandos, "comandos", ...);
+          Otra tarea en el nucleo 0. El loop de Arduino corre en el nucleo 1.
+Linea 517:  dFrente = medirFrente();
+          Primera medicion del frente.
+Linea 518-519:  tTelemetria = 0; tComandos = 0;
+Linea 520:  Serial.println("Listo");
+Linea 521: }
+
+--------------------------------------------------------------------------------
+13. LINEAS 523-605: LOOP()
+--------------------------------------------------------------------------------
+
+Linea 524:  atenderSerial();
+          Comandos por USB.
+Linea 525:  leerGas();
+          Filtro de gas.
+Linea 526:  actualizarLED();
+
+Linea 528:  if (moviendo && gas && gasCorte) {
+Linea 529-531:    moviendo = false; parar(); Serial.println("GAS: robot detenido");
+          Unica parada normal permitida: detectar gas.
+
+Linea 534:  if (moviendo) {
+Linea 535:    long ei = encIzq, ed = encDer;
+          Copia los contadores (son volatile, pueden cambiar en cualquier
+          momento; se copian para trabajar con valores estables).
+Linea 536:    float d = ((ei - prevIzq) + (ed - prevDer)) * 0.5f *
+              (2.0f * PI * 0.03f / 20.0f);
+          >>> ODOMETRIA POR ENCODERS <<<
+          (ei - prevIzq) = pulsos nuevos del izquierdo.
+          (ed - prevDer) = pulsos nuevos del derecho.
+          Se suman y se promedian (*0.5f) porque el centro del robot avanza
+          la media de las dos ruedas.
+          El factor convierte pulsos a metros:
+            radio rueda = 0.03 m
+            circunferencia = 2*pi*0.03 = 0.1885 m
+            20 pulsos por vuelta => 0.1885/20 = 0.00942 m/pulso (0.942 cm)
+Linea 537-538: prevIzq = ei; prevDer = ed;
+          Actualiza la referencia para el proximo ciclo.
+Linea 539:    x += d * cos(theta);
+Linea 540:    y += d * sin(theta);
+          Proyecta el avance sobre el rumbo. Si theta=0, avanza en +x;
+          si theta=pi/2, avanza en +y.
+          Es la ecuacion 13.34 de Modern Robotics + integracion 13.35/13.36.
+
+Linea 542:    dFrente = medirFrente();
+Linea 543:    static bool lado = false;
+          Alternador para no medir izquierda y derecha en el mismo ciclo.
+Linea 544:    if (lado) dIzq = medirLado(TRIG_L, ECHO_L);
+Linea 545:    else      dDer = medirLado(TRIG_R, ECHO_R);
+Linea 546:    lado = !lado;
+          Invierte el alternador.
+
+Linea 548:    if (digitalRead(BTN_F) == LOW ||
+           (dFrente > 0.0f && dFrente < DIST_OBSTACULO)) {
+Linea 549:      Serial.printf("Obstaculo a %.0f cm\n", dFrente);
+Linea 550:      esquivar();
+          Bumper pulsado o frente < 50 cm => evadir.
+Linea 551:      tOdo = millis();
+          Reinicia el tiempo de odometria despues del barrido.
+Linea 553-560: } else {
+          Si no hay obstaculo, avanza con correccion:
+Linea 555:      float li = (dIzq > 0.0f) ? dIzq : DIST_LIBRE;
+Linea 556:      float de = (dDer > 0.0f) ? dDer : DIST_LIBRE;
+Linea 557:      int corr = (int)((de - li) * 0.25f);
+          Si el izquierdo ve menos, corr positivo: mas velocidad a la
+          izquierda => gira hacia la derecha, alejandose del lado cercano.
+Linea 558-559: limita corr a +-30.
+Linea 560:      motores(VEL_AVANCE + corr, VEL_AVANCE - corr);
+          Avance con correccion suave.
+
+Linea 564:      if (leerGyroZ()) {
+Linea 565-568:        dtg = (ahora - tGyro)/1000;
+                  tGyro = ahora;
+                  if (dtg > 0 && dtg < 0.3) theta += (gyroZ - gyroBias)*dtg;
+          >>> ODOMETRIA DE RUMBO <<<
+          Integra la velocidad angular. Descarta dt > 0.3 s (por ejemplo
+          despues de un HTTP que bloqueo el bucle) para no dar un salto falso.
+Linea 570-571: while... normaliza theta a [-pi, pi].
+
+Linea 575:      float dt = (millis() - tOdo) / 1000.0f;
+Linea 576:      tOdo = millis();
+Linea 577:      if (dt > 0.0f && dt < 0.3f) {
+Linea 578:        float paso = (CM_POR_SEG / 100.0f) * dt;
+          >>> ODOMETRIA POR TIEMPO <<<
+          25 cm/s / 100 = 0.25 m/s. paso = 0.25 * dt metros.
+          Se introdujo porque los encoders no reportaban de forma confiable.
+Linea 579:        x += paso * cos(theta);
+Linea 580:        y += paso * sin(theta);
+          Misma proyeccion que con encoders.
+Linea 581:      }
+Linea 582:    }
+
+Linea 583:  } else {
+          Robot detenido:
+Linea 584:    parar();
+Linea 587-594: re-cero del gyro: cada 100 ms lee una muestra; con 5 muestras
+          promedia y actualiza gyroBias. Evita que el rumbo derive en reposo.
+Linea 596-601: cada 500 ms actualiza los tres sensores.
+Linea 602:  }
+Linea 604:  delay(15);
+          Ciclo de ~60 Hz.
+Linea 605: }
+          Fin del loop.
+
+
+================================================================================
+PARTE II - APP MOVIL: POST Y GET A SUPABASE
+================================================================================
+
+--------------------------------------------------------------------------------
+14. src/lib/supabase.ts (LINEAS 1-10)
+--------------------------------------------------------------------------------
+
+Linea 1: import 'react-native-url-polyfill/auto';
+          Anade compatibilidad de URL para React Native (polyfill).
+Linea 2: import { createClient } from '@supabase/supabase-js';
+          Importa la funcion que crea el cliente.
+Linea 3: import { SUPABASE_ANON_KEY, SUPABASE_URL } from '../config';
+          Trae la URL y la clave desde config.ts.
+Linea 5: export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+          Crea el cliente global que usaran todos los archivos.
+Linea 6-7:  auth: { persistSession: false,
+Linea 8:          autoRefreshToken: false,
+          No guarda sesion ni renueva token (no hay login de usuario).
+Linea 10: });
+
+--------------------------------------------------------------------------------
+15. src/config.ts
+--------------------------------------------------------------------------------
+
+  export const SUPABASE_URL = 'https://vygwqsxyfdllirelndky.supabase.co';
+  export const SUPABASE_ANON_KEY = 'sb_publishable_...';
+  export const ROBOT_ID = 'robot1';
+
+  Es la direccion del proyecto y la clave PUBLICA (publishable), pensada
+  para ir en el cliente. No es una clave secreta de administrador.
+
+--------------------------------------------------------------------------------
+16. src/hooks/useRobotData.ts - EL GET (LINEAS 92-109)
+--------------------------------------------------------------------------------
+
+Linea 92:  useEffect(() => {
+          Hook de React: ejecuta codigo al montar el componente.
+Linea 93:    async function cargar() {
+          Funcion asincrona (usa await).
+Linea 94:      const { data: filas, error: err } = await supabase
+Linea 95:        .from('lecturas_robot')
+Linea 96:        .select('*')
+Linea 97:        .order('id', { ascending: false })
+Linea 98:        .limit(LOTE);
+          >>> AQUI SE HACE EL GET DESDE LA APP <<<
+          Supabase-js convierte esto en una peticion HTTP GET a:
+          https://vygwqsxyfdllirelndky.supabase.co/rest/v1/lecturas_robot
+            ?select=*&order=id.desc&limit=30
+          LOTE = 30 (linea 8). Se pide un LOTE, no solo la ultima fila,
+          para no perder un evento de gas que duro una sola lectura.
+          'await' pausa la funcion hasta que llegue la respuesta.
+          'data: filas' renombra el campo data a filas; 'error: err' lo
+          renombra a err (destructuring de objeto).
+
+Linea 99:      if (err) {
+Linea 100:       setError(err.message);
+Linea 101:       return;
+Linea 102:     }
+          Si hubo error, lo muestra y sale.
+
+Linea 103:     if (filas?.length) procesarLote(filas as LecturaDB[]);
+          Si hay filas, las pasa a procesarLote. El "?." evita error si
+          filas es null. "as LecturaDB[]" es un casteo de TypeScript.
+
+Linea 106:    cargar();
+          Primera llamada inmediata al montar.
+Linea 107:    const t = setInterval(cargar, 1000);
+          >>> POLLING: repite el GET cada 1000 ms (1 segundo) <<<
+          Es el respaldo por si Supabase Realtime no entrega eventos.
+Linea 108:    return () => clearInterval(t);
+          Limpieza: al desmontar el componente, cancela el intervalo.
+Linea 109:  }, [procesarLote]);
+          El array de dependencias: el efecto se re-crea si procesarLote cambia.
+
+--- ¿Que hace procesarLote (lineas 77-90)? ---
+
+Linea 79:  const nuevas = [...filas]
+Linea 80:    .filter(f => f.id > ultimoIdRef.current)
+Linea 81:    .sort((a, b) => a.id - b.id);
+          Copia las filas, se queda con las que tienen id mayor al ultimo
+          procesado (ultimoIdRef, linea 23) y las ordena de menor a mayor.
+          Asi procesa en orden cronologico y no duplica.
+Linea 82-85: for (const fila de nuevas) {
+             ultimoIdRef.current = fila.id;
+             aplicarDB(fila);
+           }
+          Actualiza el ultimo id y pasa cada fila a aplicarDB.
+Linea 86:  setConectado(true);
+Linea 87:  setError(null);
+          Marca la app como conectada y limpia errores.
+
+--- ¿Que hace aplicarDB (lineas 44-73)? ---
+
+Linea 46:  const alerta = !!l.gas_alerta;
+          "!!" convierte cualquier valor a booleano real.
+Linea 49:  if (alerta && !gasActivoRef.current) {
+          Flanco de subida: hay gas ahora y antes no. Solo ahi se agrega
+          un punto rojo (lineas 50-55), evitando un punto por cada lectura.
+Linea 57:  gasActivoRef.current = alerta;
+          Actualiza el estado anterior.
+Linea 59-70: aplicar({...}) convierte la fila de la BD a RobotData:
+          pose: x = l.x_cm, y = l.y_cm, theta = l.theta_rad
+          sensors: front, left, right, gas, gasAlerta, gasPpm
+          timestamp: new Date(l.timestamp).getTime()
+Linea 27-42: aplicar() guarda el dato en el estado y agrega el punto a la
+          trayectoria, deduplicando puntos casi iguales (giros en sitio).
+
+--------------------------------------------------------------------------------
+17. src/screens/DashboardScreen.tsx - EL POST (LINEAS 41-51)
+--------------------------------------------------------------------------------
+
+Linea 41:  async function enviar(cmd: string) {
+          Funcion asincrona que recibe el comando ("ini" o "alto").
+Linea 42:    try {
+          Bloque de manejo de errores.
+Linea 43:      const { error: err } = await supabase
+Linea 44:        .from('comandos_robot')
+Linea 45:        .insert({ comando: cmd, robot_id: ROBOT_ID });
+          >>> AQUI SE HACE EL POST DESDE LA APP <<<
+          Supabase-js lo convierte en un HTTP POST a:
+          https://vygwqsxyfdllirelndky.supabase.co/rest/v1/comandos_robot
+          con cuerpo JSON: {"comando":"ini","robot_id":"robot1"}
+          El ESP32, en su tareaComandos (lineas 457-467), hace el GET de
+          esta tabla cada 1 segundo, encuentra el comando, lo ejecuta y
+          lo marca como procesado con un PATCH.
+Linea 46:      if (err) throw err;
+          Si Supabase devolvio error, lanza excepcion.
+Linea 47:      setAviso(cmd === 'ini' ? 'Orden de inicio enviada' : ...);
+          Muestra un mensaje temporal en pantalla (se borra a los 3.5 s,
+          lineas 35-39).
+Linea 48:    } catch (e: any) {
+Linea 49:      setAviso(e?.message ?? 'No se pudo enviar la orden');
+          Si fallo, muestra el error.
+Linea 51:  }
+
+Los botones que llaman a enviar():
+  "Iniciar" -> enviar('ini')   (mas abajo en el JSX)
+  "Detener" -> enviar('alto')
+
+--------------------------------------------------------------------------------
+18. FLUJO COMPLETO DE DATOS
+--------------------------------------------------------------------------------
+
+SENTIDO APP -> ROBOT (comandos):
+  Usuario toca "Iniciar"
+    -> DashboardScreen.tsx linea 45: POST a comandos_robot
+    -> Supabase guarda fila con procesado=false
+    -> ESP32 tareaComandos (linea 461) hace GET cada 1 s
+    -> revisarComandos (linea 418) ejecuta "ini"
+    -> iniciar() (linea 289) pone moviendo=true
+
+SENTIDO ROBOT -> APP (telemetria):
+  ESP32 loop() mide sensores y calcula x/y/theta
+    -> tareaTelemetria (linea 453) llama enviarTelemetria()
+    -> enviarTelemetria (linea 387) hace POST a lecturas_robot
+    -> Supabase guarda la fila con un id nuevo
+    -> App useRobotData.ts linea 94 hace GET cada 1 s
+    -> procesarLote (linea 77) filtra filas nuevas
+    -> aplicarDB (linea 44) actualiza data, trayectoria y puntos de gas
+    -> DashboardScreen dibuja el mapa con MapCanvas
+
+RESUMEN DE LAS 4 OPERACIONES HTTP:
+  ESP32 POST  -> enviarTelemetria()    firmware linea 387
+  ESP32 GET   -> revisarComandos()     firmware linea 404
+  ESP32 PATCH -> marcar procesado      firmware linea 427
+  APP   GET   -> cargar()              useRobotData.ts linea 94
+  APP   POST  -> enviar()              DashboardScreen.tsx linea 45
+
+================================================================================
+FIN DE LA GUIA
+================================================================================
