@@ -1,0 +1,363 @@
+%% ============================================================================
+%% Reporte de analisis del firmware RMA_3S_Mapa.ino
+%% Mismo formato que el reporte final del proyecto
+%% ============================================================================
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{times}
+\usepackage[spanish]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage[hyphens]{url}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage{setspace}
+\usepackage{float}
+
+\geometry{left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+\setstretch{1.0}
+\linespread{1.0}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\Urlmuskip=0mu plus 2mu\relax
+\setlength{\emergencystretch}{2em}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\fontsize{10}{12}\selectfont \thepage}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{blue}\bfseries,
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{red},
+  breaklines=true,
+  frame=single,
+  numbers=none,
+  captionpos=b
+}
+
+\begin{document}
+
+\begin{center}
+{\fontsize{14}{16}\selectfont \textbf{Análisis del firmware del vehículo terrestre autónomo}}
+
+\vspace{-0.3cm}
+{\fontsize{10}{12}\selectfont Angel Armando Carreño González$^{1}$, Mtra. Alba Maribel Sánchez Gálvez$^{2}$}
+
+\vspace{-0.2cm}
+{\fontsize{10}{12}\selectfont Facultad de Ciencias de la Computación$^{1}$, Facultad de Ciencias de la Computación$^{2}$}
+
+\vspace{-0.2cm}
+{\fontsize{10}{12}\selectfont \textbf{Resumen}}
+\end{center}
+
+{\fontsize{10}{12}\selectfont
+\begin{itshape}
+\hspace{2cm}\parbox{\dimexpr\linewidth-4cm}{%
+El presente documento describe el funcionamiento del firmware del robot
+autónomo, archivo RMA\_3S\_Mapa.ino de 605 líneas, explicando cada bloque,
+función y fragmento de código con sus líneas exactas. Se atiende de manera
+detallada la odometría, indicando las líneas que calculan la posición y el
+rumbo, la conversión de pulsos de encoder a metros, el uso del giroscopio y
+la estimación de distancia por tiempo.
+}
+\end{itshape}
+}
+
+\vspace{0.3cm}
+
+\textbf{\large 1. Visión general}
+
+El firmware es un único archivo .ino con la estructura estándar de Arduino:
+\begin{itemize}
+  \item \texttt{setup()} (líneas 473--521): se ejecuta una sola vez al encender.
+  \item \texttt{loop()} (líneas 523--605): se ejecuta indefinidamente.
+\end{itemize}
+
+El reparto de líneas es el siguiente:
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Líneas} & \textbf{Contenido} \\ \midrule
+1--10        & Comentario descriptivo del programa \\
+12--17       & Librerías (WiFi, HTTP, I2C, sistema ESP32) \\
+19--30       & Credenciales: \texttt{secrets.h} o valores vacíos \\
+32--46       & Pines físicos y variables del giroscopio \\
+48--62       & Constantes de ajuste \\
+64--82       & Variables de estado globales \\
+84--104      & Funciones del MPU6050 \\
+106--119     & Funciones de motores \\
+121--148     & Funciones de ultrasonido \\
+150--171     & Sensor de gas \\
+173--279     & Giro y evasión \\
+281--286     & LED de estado \\
+288--337     & Comandos por puerto serial \\
+339--444     & Comunicación con Supabase \\
+446--467     & Tareas FreeRTOS de red \\
+469--521     & \texttt{setup()} \\
+523--605     & \texttt{loop()} \\ \bottomrule
+\end{tabular}
+\caption{Mapa de líneas del firmware}
+\end{table}
+
+\textbf{\large 2. Cabecera e inclusiones (líneas 1--30)}
+
+Las líneas 1--10 son un comentario que resume el comportamiento: avanzar, evadir
+con 8 pasos de 45 grados, parar por gas y recibir comandos.
+
+Las líneas 12--17 cargan las librerías: \texttt{WiFi.h} (WiFi),
+\texttt{WiFiMulti.h} (varias redes), \texttt{WiFiClientSecure.h} (HTTPS),
+\texttt{HTTPClient.h} (POST/GET/PATCH), \texttt{Wire.h} (I2C para el MPU6050) y
+\texttt{esp\_system.h} (para \texttt{esp\_reset\_reason()}).
+
+El bloque de las líneas 19--30 es condicional: si existe \texttt{secrets.h} se
+incluye con las credenciales reales; si no, se definen cadenas vacías y se
+emite un aviso. Así el código compila sin filtrar contraseñas en el repositorio.
+
+\textbf{\large 3. Pines y constantes (líneas 32--82)}
+
+Los pines de motores (líneas 33--34) son EN\_DER = 4 con IN1 = 12 e IN2 = 14
+para el derecho, y EN\_IZQ = 15 con IN3 = 33 e IN4 = 32 para el izquierdo.
+Los pines de los tres HC--SR04 (líneas 35--37) son: frente (Trig 5, Echo 18),
+izquierda (Trig 17, Echo 16) y derecha (Trig 25, Echo 34). El GPIO 34 es
+solo de entrada, por eso se usa como Echo. La línea 38 define el bumper en 26,
+la 39 el MQ--2 (DO 23, AO 36), la 40 el LED en 2 y la 41 los encoders en 19 y 13.
+
+Las líneas 49--54 fijan \texttt{VEL\_AVANCE = 190}, \texttt{VEL\_GIRO = 170},
+el gatillo de obstáculo de 50 cm, el valor de vía libre de 300 cm y
+\texttt{CM\_POR\_SEG = 25.0f}, velocidad estimada en cm/s usada por la odometría
+por tiempo. Las líneas 56--58 contienen \texttt{SENTIDO\_IZQ} y
+\texttt{SENTIDO\_DER}: si el robot gira en círculos en vez de avanzar, se cambia
+uno a $-1$; reemplazan a la antigua calibración automática de motores.
+
+Las líneas 65--82 declaran el estado: \texttt{moviendo}, \texttt{theta},
+las tres distancias, la alarma de gas, los contadores de encoder, las
+posiciones \texttt{x} e \texttt{y} en metros y los contadores de tiempo.
+
+\textbf{\large 4. MPU6050 (líneas 84--104)}
+
+La función \texttt{initMPU()} (líneas 85--94) arranca el bus I2C, despierta el
+chip escribiendo 0x00 en el registro 0x6B y configura el giroscopio a
+$\pm 500$ grados por segundo escribiendo 0x08 en el registro 0x1B.
+La función \texttt{leerGyroZ()} (líneas 96--104) lee dos bytes desde el
+registro 0x47, los une en un \texttt{int16\_t} y convierte a rad/s con
+\texttt{raw / 65.5f}. Devuelve falso si falla el I2C.
+
+\textbf{\large 5. Control de motores (líneas 106--119)}
+
+La función \texttt{motores(izq, der)} aplica primero los multiplicadores de
+polaridad (líneas 108--109). Para el motor derecho, si \texttt{der} es positivo
+pone IN1 en HIGH e IN2 en LOW y aplica el valor absoluto como PWM en EN\_DER;
+si es negativo invierte las señales (líneas 110--112). El izquierdo se maneja
+igual con IN3/IN4 y EN\_IZQ (líneas 114--116). \texttt{parar()} (línea 119)
+llama a \texttt{motores(0,0)} sin rampa, para cortar de inmediato ante un gas.
+
+\textbf{\large 6. Ultrasónicos (líneas 121--148)}
+
+\texttt{medir()} (líneas 122--129) emite un pulso de 10 $\mu$s en Trig y mide
+con \texttt{pulseIn} cuánto tiempo permanece alto Echo, con un límite de
+18 ms (unos 3 m). Si devuelve cero, significa ``sin eco'' (vía libre), no un
+obstáculo pegado. La distancia se calcula con $d = t \cdot 0.0343/2$, donde
+0.0343 es la velocidad del sonido en cm/$\mu$s y se divide entre 2 porque el
+sonido va y regresa.
+
+\texttt{medirFrente()} (líneas 131--143) toma tres muestras, descarta las
+menores o iguales a 2 cm, devuelve 300 si ninguna sirve y otherwise la mediana.
+La mediana elimina ecos espurios aislados. \texttt{medirLado()} (líneas
+145--148) toma una sola muestra y devuelve 0 si es menor a 2 cm.
+
+\textbf{\large 7. Sensor de gas (líneas 150--171)}
+
+\texttt{leerGas()} muestrea cada 50 ms (20 Hz). Lee el DO en el GPIO 23 y el
+AO en el GPIO 36, calcula \texttt{ppm = (v-0.8)*800} solo para la app (el AO
+está desconectado y da 0 V). La línea 163 marca \texttt{doUtil = true} al ver
+el DO en LOW, confirmando que el pin está conectado. La línea 165 desplaza un
+registro de 24 bits \texttt{histDO} con el historial; las líneas 166--167
+cuentan cuántos bits están en alto. La alarma se enciende con 20 de 24 en alto
+(1.2 s) y se libera con 22 o más en bajo. Ese filtro por mayoría evita que el
+pico de corriente de los motores genera una falsa alarma.
+
+\textbf{\large 8. Movimiento y evasión (líneas 173--279)}
+
+La línea 174 declara \texttt{atenderSerial()} antes de usarla.
+
+\texttt{girar(grados)} (líneas 178--207) integra el giroscopio hasta alcanzar
+el ángulo pedido, con un tope de seguridad de $|grados| \cdot 22 + 800$ ms.
+Durante el giro atiende comandos y lee el gas, para poder frenar con
+\texttt{alto}. Al terminar para, reinicia \texttt{tGyro}, suma el giro a
+\texttt{theta} y lo normaliza a $[-\pi,\pi]$.
+
+\texttt{girarHastaDespejar()} (líneas 212--240) no gira un ángulo fijo: gira
+hacia un lado hasta que el frente supera 90 cm ($\text{DIST\_OBSTACULO}
+\cdot 1.8$), con un mínimo de 12 grados para no creer un eco pendiente y un
+tope de 3.5 s. La línea 237 suma el ángulo realmente medido.
+
+\texttt{esquivar()} (líneas 245--279) vuelve a medir el frente tras 60 ms para
+descartar falsos ecos; si algún lateral supera 70 cm gira hacia ese lado; si
+ambos están tapados hace el barrido de 8 pasos de 45 grados y elige el mejor
+rumbo.
+
+\textbf{\large 9. LED (líneas 281--286)}
+
+Parpadeo rápido de 150 ms con gas, LED fijo con el robot en marcha y latido
+lento de 800 ms en reposo.
+
+\textbf{\large 10. Comandos (líneas 288--337)}
+
+\texttt{iniciar()} (líneas 289--297) para, pone \texttt{theta = 0}, sincroniza
+los contadores de encoder con \texttt{prevIzq} y \texttt{prevDer}, activa
+\texttt{moviendo} y responde \texttt{ACK:INI}. No hay calibración de motores.
+\texttt{ejecutarComando()} (líneas 299--325) reconoce \texttt{ini},
+\texttt{alto}, \texttt{ping}, \texttt{gasoff}, \texttt{gason} y \texttt{mq2}.
+\texttt{atenderSerial()} (líneas 327--337) acumula caracteres hasta un salto
+de línea y ejecuta el comando; se llama también dentro de los giros.
+
+\textbf{\large 11. Supabase (líneas 339--444)}
+
+\texttt{agregarCabeceras()} añade la clave publishable y el tipo de contenido.
+\texttt{conectarWiFi()} espera hasta 20 s a que alguna red conecte.
+\texttt{enviarTelemetria()} (líneas 363--391) construye el JSON a mano con
+posición, rumbo, distancias, estado del gas, tiempo de funcionamiento y motivo
+de reinicio, y hace un POST. \texttt{revisarComandos()} (líneas 393--431) hace
+un GET, extrae el comando y el id con \texttt{indexOf}, lo ejecuta y marca
+procesado con un PATCH. \texttt{descartarComandosViejos()} limpia los comandos
+pendientes al arrancar.
+
+\textbf{\large 12. Tareas FreeRTOS (líneas 446--467)}
+
+\texttt{tareaTelemetria} espera 100 ms y publica; \texttt{tareaComandos}
+espera 1 s y consulta órdenes (o reconecta cada 30 s si no hay WiFi). Cada una
+usa su propio cliente TLS (\texttt{tlsTel} y \texttt{tlsCmd}). Ambas se crean
+en las líneas 514--515 fijadas al núcleo 0, mientras \texttt{loop()} corre en
+el núcleo 1. Antes, un sola tarea hacía POST y GET seguidos y tardaba unos 3 s.
+
+\textbf{\large 13. Setup (líneas 469--521)}
+
+Configura el serial a 115200 baudios, guarda el motivo de reinicio, define la
+dirección de los pines, adjunta el PWM de los motores a 5 kHz y 8 bits,
+registra las interrupciones de los encoders, inicializa el MPU y promedia 40
+lecturas para obtaining el cero del giroscopio, conecta el WiFi, crea las dos
+tareas de red y hace la primera medición del frente.
+
+\textbf{\large 14. Loop (líneas 523--605)}
+
+Atiende comandos, lee el gas y actualiza el LED (líneas 524--526). Si hay gas,
+detiene el robot (líneas 528--532). Si está en marcha (líneas 534--582), calcula
+la odometría, mide los sensores, esquiva si hay obstáculo o avanza con
+corrección suave, y actualiza el rumbo y la posición. Si está detenido
+(líneas 583--602), para los motores, re-cera el giroscopio y actualiza los
+sensores cada 500 ms. El ciclo termina con \texttt{delay(15)} (línea 604),
+unos 60 Hz.
+
+\newpage
+
+\textbf{\large 15. Odometría: líneas exactas y funcionamiento}
+
+La odometría estima la posición $(x,y)$ y el rumbo $\theta$ integrando el
+movimiento de las ruedas. Corresponde a la Sección 13.4 ``Odometry'' del libro
+\textit{Modern Robotics} (páginas 548--550 del libro, 568--570 del PDF), en
+particular la ecuación 13.34 para tracción diferencial.
+
+\textbf{15.1 Variables implicadas}
+
+La línea 71 define \texttt{theta}; las líneas 77--79 los contadores de encoder
+(\texttt{volatile}), el último valor leído y la posición en metros; la línea 81
+la marca de tiempo \texttt{tOdo}; la línea 54 la velocidad \texttt{CM\_POR\_SEG}.
+Las interrupciones de las líneas 470--471 incrementan los contadores en cada
+flanco ascendente. Las líneas 293--294 sincronizan \texttt{prevIzq} y
+\texttt{prevDer} al iniciar, para no contar pulsos ocurridos en reposo.
+
+\textbf{15.2 Odometría por encoders (líneas 535--540)}
+
+\begin{lstlisting}[language=C]
+long ei = encIzq, ed = encDer;
+float d = ((ei - prevIzq) + (ed - prevDer)) * 0.5f
+          * (2.0f * PI * 0.03f / 20.0f);
+prevIzq = ei;
+prevDer = ed;
+x += d * cos(theta);
+y += d * sin(theta);
+\end{lstlisting}
+
+La diferencia de contadores da los pulsos desde el ciclo anterior. Se suman
+ambos lados y se promedian, porque en un robot diferencial el centro del
+chasis avanza la media de las dos ruedas. El factor convierte pulsos a metros:
+el radio de la rueda es 0.03 m, la circunferencia es $2\pi(0.03) = 0.1885$ m y
+hay 20 pulsos por vuelta, por lo que cada pulso equivale a
+$0.1885/20 = 0.00942$ m, es decir 0.942 cm. Finalmente las líneas 539--540
+proyectan ese avance sobre el rumbo con $\cos\theta$ y $\sin\theta$: si
+$\theta = 0$ todo va en $+x$, si $\theta = \pi/2$ va en $+y$.
+
+\textbf{15.3 Rumbo con giroscopio (líneas 562--571)}
+
+\begin{lstlisting}[language=C]
+if (leerGyroZ()) {
+  unsigned long ahora = millis();
+  float dtg = (ahora - tGyro) / 1000.0f;
+  tGyro = ahora;
+  if (dtg > 0.0f && dtg < 0.3f) theta += (gyroZ - gyroBias) * dtg;
+}
+while (theta >  PI) theta -= 2 * PI;
+while (theta < -PI) theta += 2 * PI;
+\end{lstlisting}
+
+Se integra la velocidad angular menos el bias, se descartan saltos mayores a
+0.3 s (por ejemplo tras un HTTP que bloqueó el bucle) y se mantiene $\theta$
+en $[-\pi,\pi]$. El valor de \texttt{tGyro} se reinicia al terminar cada giro
+(líneas 203 y 236) y en el setup (línea 508).
+
+\textbf{15.4 Odometría por tiempo (líneas 573--581)}
+
+\begin{lstlisting}[language=C]
+float dt = (millis() - tOdo) / 1000.0f;
+tOdo = millis();
+if (dt > 0.0f && dt < 0.3f) {
+  float paso = (CM_POR_SEG / 100.0f) * dt;
+  x += paso * cos(theta);
+  y += paso * sin(theta);
+}
+\end{lstlisting}
+
+Se estima la distancia como $0.25 \cdot dt$ metros (25 cm/s entre 100) y se
+proyecta sobre $\theta$. Se introdujo porque los encoders no reportaban de
+forma confiable: con esta estimación el mapa muestra el recorrido aunque los
+contadores queden en cero.
+
+\textbf{15.5 Envío al mapa}
+
+Las líneas 373--374 de \texttt{enviarTelemetria} multiplican \texttt{x} e
+\texttt{y} por 100 para enviar centímetros a la aplicación, que dibuja la
+trayectoria con esos valores.
+
+\textbf{15.6 Observación importante}
+
+Las dos odometrías (15.2 y 15.4) están activas al mismo tiempo cuando el robot
+avanza, por lo que ambas suman a \texttt{x} e \texttt{y}. Si los encoders
+funcionaran, la distancia se contaría dos veces. En la práctica no reportan
+($d = 0$) y solo aporta la odometría por tiempo. Si se conectaran los
+encoders, conviene desactivar una de las dos.
+
+\textbf{\large 16. Observaciones finales}
+
+\begin{enumerate}
+  \item Doble odometría activa: riesgo de duplicar la distancia si los encoders llegan a contar.
+  \item \texttt{T\_TELEMETRIA} y \texttt{T\_COMANDOS} ya no se usan: la frecuencia la fijan las tareas.
+  \item El comentario inicial dice ``sin giroscopio'', pero el código sí lo usa para giros y rumbo.
+  \item Los comandos por USB y Supabase comparten \texttt{ejecutarComando}, por lo que \texttt{alto} puede frenar el robot durante un giro.
+  \item La alarma de gas detiene el robot; para reanudarlo hay que enviar \texttt{ini} de nuevo.
+\end{enumerate}
+
+\end{document}
