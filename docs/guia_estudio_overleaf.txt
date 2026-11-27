@@ -1,0 +1,440 @@
+%% ============================================================================
+%% Guia de estudio: codigo linea por linea (firmware + app)
+%% Mismo formato que el reporte final del proyecto
+%% ============================================================================
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{times}
+\usepackage[spanish]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage[hyphens]{url}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage{setspace}
+\usepackage{float}
+
+\geometry{left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+\setstretch{1.0}
+\linespread{1.0}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\Urlmuskip=0mu plus 2mu\relax
+\setlength{\emergencystretch}{2em}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\fontsize{10}{12}\selectfont \thepage}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{blue}\bfseries,
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{red},
+  breaklines=true,
+  frame=single,
+  numbers=none,
+  captionpos=b
+}
+
+\begin{document}
+
+\begin{center}
+{\fontsize{14}{16}\selectfont \textbf{Guía de estudio del código: firmware y aplicación móvil}}
+
+\vspace{-0.3cm}
+{\fontsize{10}{12}\selectfont Angel Armando Carreño González$^{1}$, Mtra. Alba Maribel Sánchez Gálvez$^{2}$}
+
+\vspace{-0.2cm}
+{\fontsize{10}{12}\selectfont Facultad de Ciencias de la Computación$^{1}$, Facultad de Ciencias de la Computación$^{2}$}
+
+\vspace{-0.2cm}
+{\fontsize{10}{12}\selectfont \textbf{Resumen}}
+\end{center}
+
+{\fontsize{10}{12}\selectfont
+\begin{itshape}
+\hspace{2cm}\parbox{\dimexpr\linewidth-4cm}{%
+Guía de estudio línea por línea del firmware del robot (RMA\_3S\_Mapa.ino,
+605 líneas) y del código de la aplicación móvil donde se realizan las
+peticiones HTTP a Supabase: el GET de telemetría y el POST de comandos.
+}
+\end{itshape}
+}
+
+\vspace{0.3cm}
+
+\textbf{\large PARTE I. FIRMWARE ESP32}
+
+\textbf{1. Líneas 1--30: cabecera, librerías y secretos}
+
+La línea 1 inicia un comentario de bloque (\texttt{/* ... */}); no se ejecuta.
+La línea 9 dice ``Sin giroscopio'', pero está desactualizado: el código sí lo
+usa (líneas 84--104 y 562--571). Es un error del texto, no del programa.
+
+Las líneas 12--17 cargan librerías: \texttt{WiFi.h} (WiFi),
+\texttt{WiFiMulti.h} (varias redes), \texttt{WiFiClientSecure.h} (HTTPS),
+\texttt{HTTPClient.h} (POST/GET), \texttt{Wire.h} (I2C) y
+\texttt{esp\_system.h} (\texttt{esp\_reset\_reason()}).
+
+La línea 19 es una directiva del preprocesador: \texttt{\#if
+\_\_has\_include("secrets.h")} pregunta, antes de compilar, si existe ese
+archivo. Si existe (línea 20) se incluye con las credenciales reales; si no,
+se compila con valores vacíos (líneas 23--29) y un aviso. Así el código de
+GitHub no filtra contraseñas. La línea 23 define un \texttt{struct} con dos
+campos de texto: \texttt{ssid} y \texttt{pass}; la 24 crea un array de una red
+vacia; la 25 pone \texttt{NUM\_REDES\_WIFI = 0}.
+
+\textbf{2. Líneas 32--82: pines, constantes y estado}
+
+Línea 33: \texttt{EN\_DER = 4} es el pin Enable (PWM de velocidad) del motor
+derecho; \texttt{IN1 = 12} e \texttt{IN2 = 14} deciden el sentido: uno HIGH y
+otro LOW = adelante, al revés = atrás, ambos igual = freno. Línea 34: igual
+para el izquierdo con \texttt{EN\_IZQ = 15}, \texttt{IN3 = 33}, \texttt{IN4 = 32}.
+
+Líneas 35--37: pines de los tres HC--SR04, cada uno con Trig y Echo. El GPIO
+34 es solo entrada, por eso se usa como Echo. Línea 38: bumper en 26. Línea
+39: MQ--2 con DO en 23 y AO en 36. Línea 40: LED en 2. Línea 41: encoders en
+19 y 13.
+
+Línea 43: \texttt{MPU\_ADDR = 0x68}, dirección I2C. Línea 44: \texttt{gyroZ},
+velocidad angular en rad/s. Línea 45: \texttt{gyroBias}, valor en reposo que
+se resta para quitar deriva. Línea 46: \texttt{tGyro}, marca de tiempo.
+
+Línea 49: \texttt{VEL\_AVANCE = 190} (PWM de 0 a 255, 75\% de potencia). Línea
+50: \texttt{VEL\_GIRO = 170}. Línea 51: gatillo de 50 cm. Línea 52: 300 cm =
+vía libre. Línea 54: \texttt{CM\_POR\_SEG = 25}, velocidad estimada usada en
+la odometría por tiempo.
+
+Líneas 57--58: \texttt{SENTIDO\_IZQ} y \texttt{SENTIDO\_DER}. Si el robot gira
+en círculos, se cambia uno a $-1$; reemplaza a una autocalibración que fallaba.
+
+Líneas 60--61: \texttt{T\_TELEMETRIA} y \texttt{T\_COMANDOS} ya no se usan (la
+frecuencia la marcan las tareas FreeRTOS). Línea 62: \texttt{T\_HTTP = 3000},
+timeout HTTPS.
+
+Línea 65: \texttt{WiFiMulti}. Líneas 67--68: dos clientes TLS separados,
+\texttt{tlsTel} y \texttt{tlsCmd}, porque compartir uno hacía que el ciclo
+POST+GET tardara 3 s.
+
+Línea 70: \texttt{moviendo}. Línea 71: \texttt{theta}. Línea 72: las tres
+distancias. Línea 74: \texttt{gas}, \texttt{gasCorte}, \texttt{doUtil}. Línea
+77: contadores de encoder \texttt{volatile}: el compilador sabe que pueden
+cambiar desde una interrupción. Línea 78: valores anteriores. Línea 79:
+\texttt{x} e \texttt{y} en METROS. Línea 81: marcas de tiempo. Línea 82:
+\texttt{resetReason} (1 = encendido, 9 = brownout).
+
+\textbf{3. Líneas 84--104: MPU6050}
+
+\begin{lstlisting}[language=C]
+void initMPU() {
+  Wire.begin();
+  Wire.setTimeOut(100);
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x6B); Wire.write(0x00);   // despertar
+  Wire.endTransmission(true);
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x1B); Wire.write(0x08);   // +-500 dps
+  Wire.endTransmission(true);
+}
+\end{lstlisting}
+
+I2C funciona por registros: primero el registro, luego el valor. 0x6B es
+POWER\_MGMT (0 = despierta); 0x1B es FS\_SEL (0x08 = $\pm 500$ grados/s).
+
+\begin{lstlisting}[language=C]
+bool leerGyroZ() {
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x47);   // GYRO_ZOUT_H
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom((uint8_t)MPU_ADDR, (uint8_t)2) != 2) return false;
+  int16_t raw = (Wire.read() << 8) | Wire.read();
+  gyroZ = (raw / 65.5f) * DEG_TO_RAD;
+  return true;
+}
+\end{lstlisting}
+
+\texttt{endTransmission(false)} usa repeated-start: envía la dirección sin
+soltar el bus. Se piden 2 bytes; el byte alto se desplaza 8 bits y se le hace
+OR con el bajo, obteniendo un entero de 16 bits con signo. El 65.5 viene de
+$32768/500$ (cuentas por grado/s); \texttt{DEG\_TO\_RAD} ($\pi/180$) pasa a
+rad/s.
+
+\textbf{4. Líneas 106--119: motores}
+
+\begin{lstlisting}[language=C]
+void motores(int izq, int der) {
+  izq *= SENTIDO_IZQ;
+  der *= SENTIDO_DER;
+  digitalWrite(IN1, der >= 0 ? HIGH : LOW);
+  digitalWrite(IN2, der >= 0 ? LOW  : HIGH);
+  ledcWrite(EN_DER, der >= 0 ? der : -der);
+  digitalWrite(IN3, izq >= 0 ? HIGH : LOW);
+  digitalWrite(IN4, izq >= 0 ? LOW  : HIGH);
+  ledcWrite(EN_IZQ, izq >= 0 ? izq : -izq);
+}
+void parar() { motores(0, 0); }
+\end{lstlisting}
+
+El operador \texttt{?:} es un ``if'' corto. \texttt{ledcWrite} solo acepta
+positivos, por eso se usa el valor absoluto. \texttt{parar()} no tiene rampa:
+parada inmediata al detectar gas.
+
+\textbf{5. Líneas 121--148: ultrasónicos}
+
+\begin{lstlisting}[language=C]
+float medir(int trig, int echo) {
+  digitalWrite(trig, LOW);  delayMicroseconds(3);
+  digitalWrite(trig, HIGH); delayMicroseconds(10);
+  digitalWrite(trig, LOW);
+  unsigned long us = pulseIn(echo, HIGH, 18000UL);
+  if (us == 0) return 0.0f;         // sin eco = via libre
+  return us * 0.0343f / 2.0f;
+}
+\end{lstlisting}
+
+Pulso de 10 $\mu$s en Trig; \texttt{pulseIn} mide cuánto está alto Echo, con
+timeout de 18 ms (~3 m). Cero significa ``no vi nada'', no ``obstáculo
+pegado''. Se usa 0.0343 cm/$\mu$s y se divide entre 2 porque el sonido va y
+vuelve.
+
+\texttt{medirFrente()} (131--143) toma 3 muestras, descarta las $\leq 2$ cm,
+devuelve 300 si ninguna sirve y ordena con burbujeo para devolver la mediana
+(\texttt{v[n/2]}). \texttt{medirLado()} (145--148) toma una sola muestra.
+
+\textbf{6. Líneas 150--171: gas}
+
+\begin{lstlisting}[language=C]
+static uint32_t histDO = 0;
+histDO = (histDO << 1) | (nivelDO == HIGH ? 1UL : 0UL);
+uint8_t altos = 0;
+for (int i = 0; i < 24; i++) altos += (histDO >> i) & 1UL;
+if (doUtil && altos >= 20) gas = true;
+else if (altos <= 2)       gas = false;
+\end{lstlisting}
+
+Registro de desplazamiento de 24 muestras (1.2 s a 20 Hz). Alarma con 20 de
+24 en alto: filtro por mayoría que descarta el pulso falso del pico de
+corriente de los motores. Histeresis: se libera con 22 de 24 en bajo.
+
+\textbf{7. Líneas 173--279: movimiento y evasión}
+
+\texttt{girar()} (178--207) integra el gyro hasta el ángulo pedido, con tope
+de $\vert grados\vert \cdot 22 + 800$ ms. Dentro del bucle atiendeSerial() y
+leerGas() para poder frenar. Al terminar actualiza \texttt{theta} con el
+ángulo MANDADO y lo normaliza a $[-\pi,\pi]$.
+
+\texttt{girarHastaDespejar()} (212--240) gira hasta que el frente supera
+$50 \cdot 1.8 = 90$ cm, con mínimo de 12 grados y tope de 3.5 s. Aquí
+\texttt{theta += acum} usa el ángulo REAL medido.
+
+\texttt{esquivar()} (245--279): vuelve a medir tras 60 ms para descartar falsos
+ecos; si un lado supera 70 cm gira hacia ese lado; si ambos están tapados hace
+8 pasos de 45 grados y elige el mejor rumbo (convertido al camino corto con
+\texttt{giro -= 360} si era mayor a 180).
+
+\textbf{8. Líneas 281--286: LED}
+
+Con gas parpadeo de 150 ms (\texttt{(t/150)\%2}), fijo en marcha, latido de
+800 ms en reposo.
+
+\textbf{9. Líneas 288--337: comandos}
+
+\texttt{iniciar()} para, pone \texttt{theta = 0}, sincroniza
+\texttt{prevIzq}/\texttt{prevDer} con los contadores (para no contar pulsos
+viejos), activa \texttt{moviendo} y responde \texttt{ACK:INI}. No hay
+calibración de motores.
+
+\texttt{ejecutarComando()} reconoce \texttt{ini}, \texttt{alto},
+\texttt{ping}, \texttt{gasoff}, \texttt{gason} y \texttt{mq2}.
+\texttt{atenderSerial()} acumula caracteres hasta un salto de línea (máximo
+32) y ejecuta.
+
+\textbf{10. Líneas 339--444: Supabase en el ESP32}
+
+\texttt{agregarCabeceras()} añade \texttt{apikey},
+\texttt{Authorization: Bearer}, \texttt{Content-Type} y \texttt{Prefer}.
+\texttt{conectarWiFi()} intenta hasta 20 s.
+
+\begin{lstlisting}[language=C]
+int code = http.POST(body);   // linea 387: POST a lecturas_robot
+\end{lstlisting}
+
+El JSON se construye a mano (líneas 371--385): \texttt{x\_cm} e
+\texttt{y\_cm} se multiplican por 100 (los internos están en metros), y se
+incluyen rumbo, distancias, estado del gas, \texttt{uptime\_ms} y
+\texttt{reset\_reason}. Supabase responde 201 o 200.
+
+\begin{lstlisting}[language=C]
+if (http.GET() == 200) {      // linea 404: GET a comandos_robot
+  String s = http.getString();
+  int ic = s.indexOf("\"comando\":\"");
+  int ii = s.indexOf("\"id\":");
+  ...
+}
+\end{lstlisting}
+
+La URL ya trae \texttt{?procesado=eq.false\&robot\_id=eq.robot1\&order=id.asc\&limit=1}.
+Se extraen comando e id con \texttt{indexOf} (sin ArduinoJson). Luego
+\texttt{ejecutarComando()} (línea 418) y un PATCH (línea 427) marcan
+\texttt{procesado=true}. \texttt{descartarComandosViejos()} (433--444) limpia
+los pendientes al arrancar.
+
+\textbf{11. Líneas 446--467: tareas FreeRTOS}
+
+\texttt{tareaTelemetria} duerme 100 ms y publica; el POST tarda ~1 s, así que
+la frecuencia real es ~1.2 s. \texttt{tareaComandos} duerme 1 s y consulta, o
+reconecta cada 30 s si no hay WiFi. \texttt{vTaskDelay(pdMS\_TO\_TICKS(100))}
+convierte milisegundos a ticks del sistema operativo.
+
+\textbf{12. Líneas 469--521: setup()}
+
+Las líneas 470--471 son las ISR de los encoders con \texttt{IRAM\_ATTR}
+(memoria rápida). Línea 474: serial a 115200. Línea 477: motivo de reinicio.
+Líneas 480--488: \texttt{pinMode}; \texttt{INPUT\_PULLUP} en bumper y MQ2\_DO,
+\texttt{INPUT\_PULLDOWN} en encoders. Líneas 490--491: PWM a 5 kHz, 8 bits.
+Líneas 494--495: interrupciones por flanco ascendente. Líneas 499--504: 40
+lecturas del gyro en reposo, promedio = \texttt{gyroBias}. Líneas 511--512:
+\texttt{setInsecure()} una sola vez. Líneas 514--515: las dos tareas fijadas
+al núcleo 0; el \texttt{loop()} queda en el núcleo 1.
+
+\textbf{13. Líneas 523--605: loop()}
+
+Línea 524 atiende serial, 525 lee gas, 526 actualiza LED. Líneas 528--532:
+si hay gas se detiene (única parada normal). Línea 534: si \texttt{moviendo}:
+
+\begin{lstlisting}[language=C]
+long ei = encIzq, ed = encDer;                       // 535
+float d = ((ei - prevIzq) + (ed - prevDer)) * 0.5f  // 536
+          * (2.0f * PI * 0.03f / 20.0f);
+prevIzq = ei; prevDer = ed;                           // 537-538
+x += d * cos(theta); y += d * sin(theta);             // 539-540
+\end{lstlisting}
+
+Es la odometría por encoders: promedio de las dos ruedas por ser tracción
+diferencial; el factor $2\pi(0.03)/20 = 0.00942$ m/pulso (radio 3 cm, 20
+pulsos por vuelta). La proyección con $\cos\theta$ y $\sin\theta$ es la
+ecuación 13.34 de \textit{Modern Robotics}.
+
+Líneas 542--546: mide frente y alterna los sensores laterales. Líneas
+548--551: si hay obstáculo, \texttt{esquivar()}. Líneas 555--560: si no,
+avance con \texttt{corr = (de-li)*0.25} limitado a $\pm 30$ para no arrastrarse
+contra la pared.
+
+\begin{lstlisting}[language=C]
+if (dtg > 0.0f && dtg < 0.3f) theta += (gyroZ - gyroBias) * dtg;  // 568
+float paso = (CM_POR_SEG / 100.0f) * dt;                          // 578
+x += paso * cos(theta); y += paso * sin(theta);                   // 579-580
+\end{lstlisting}
+
+Línea 568: rumbo con gyro; se descartan $dt > 0.3$ s. Líneas 578--580:
+odometría por tiempo a 0.25 m/s. En detenido (583--602) se re-cera el gyro
+y seActualizan sensores cada 500 ms. Línea 604: \texttt{delay(15)} (~60 Hz).
+
+\newpage
+
+\textbf{\large PARTE II. APP MÓVIL: POST Y GET A SUPABASE}
+
+\textbf{14. src/lib/supabase.ts (líneas 1--10)}
+
+La línea 1 importa un \texttt{polyfill} de URL para React Native; la 2
+\texttt{createClient}; la 3 trae URL y clave de \texttt{config.ts}; la 5 crea
+el cliente global con \texttt{persistSession: false} y
+\texttt{autoRefreshToken: false} (no hay login).
+
+\textbf{15. src/config.ts}
+
+Contiene \texttt{SUPABASE\_URL} (https://vygwqsxyfdllirelndky.supabase.co),
+la clave \texttt{sb\_publishable\_...} y \texttt{ROBOT\_ID = 'robot1'}. La
+clave es pública (publishable), pensada para ir en el cliente.
+
+\textbf{16. src/hooks/useRobotData.ts: EL GET (líneas 92--109)}
+
+\begin{lstlisting}[language=JavaScript]
+useEffect(() => {
+  async function cargar() {
+    const { data: filas, error: err } = await supabase
+      .from('lecturas_robot')
+      .select('*')
+      .order('id', { ascending: false })
+      .limit(LOTE);
+    if (err) { setError(err.message); return; }
+    if (filas?.length) procesarLote(filas as LecturaDB[]);
+  }
+  cargar();
+  const t = setInterval(cargar, 1000);
+  return () => clearInterval(t);
+}, [procesarLote]);
+\end{lstlisting}
+
+Es el GET a \texttt{/rest/v1/lecturas\_robot?select=*\&order=id.desc\&limit=30}.
+Se pide un lote de 30 (LOTE, línea 8), no solo la última fila, para no perder
+un evento de gas que dure una sola lectura. \texttt{await} espera la respuesta;
+\texttt{data: filas} renombra el campo. \texttt{setInterval(cargar, 1000)} es
+el polling de respaldo cada 1 segundo, y \texttt{clearInterval} lo cancela al
+desmontar.
+
+\texttt{procesarLote()} (77--90) filtra con \texttt{f.id > ultimoIdRef.current},
+ordena de menor a mayor y llama a \texttt{aplicarDB()} para cada fila nueva.
+\texttt{aplicarDB()} (44--73) detecta el flanco de subida del gas
+(\texttt{alerta \&\& !gasActivoRef.current}) para poner un solo punto rojo por
+evento, y convierte la fila a \texttt{RobotData}: \texttt{x = l.x\_cm},
+\texttt{y = l.y\_cm}, \texttt{theta = l.theta\_rad}, sensores y timestamp.
+
+\textbf{17. src/screens/DashboardScreen.tsx: EL POST (líneas 41--51)}
+
+\begin{lstlisting}[language=JavaScript]
+async function enviar(cmd: string) {
+  try {
+    const { error: err } = await supabase
+      .from('comandos_robot')
+      .insert({ comando: cmd, robot_id: ROBOT_ID });
+    if (err) throw err;
+    setAviso(cmd === 'ini' ? 'Orden de inicio enviada' : 'Orden de parada enviada');
+  } catch (e: any) {
+    setAviso(e?.message ?? 'No se pudo enviar la orden');
+  }
+}
+\end{lstlisting}
+
+Es el POST a \texttt{/rest/v1/comandos\_robot} con cuerpo
+\texttt{\{"comando":"ini","robot\_id":"robot1"\}}. El botón ``Iniciar'' llama
+a \texttt{enviar('ini')} y el de ``Detener'' a \texttt{enviar('alto')}. El
+mensaje se borra solo a los 3.5 s (líneas 35--39).
+
+\textbf{18. Flujo completo}
+
+APP $\rightarrow$ ROBOT: el usuario toca ``Iniciar'' $\rightarrow$ POST a
+\texttt{comandos\_robot} $\rightarrow$ Supabase guarda \texttt{procesado=false}
+$\rightarrow$ el ESP32 hace GET cada 1 s $\rightarrow$ ejecuta \texttt{ini}
+$\rightarrow$ \texttt{moviendo=true}.
+
+ROBOT $\rightarrow$ APP: el ESP32 mide y calcula $x,y,\theta$ $\rightarrow$ POST
+a \texttt{lecturas\_robot} $\rightarrow$ la app hace GET cada 1 s $\rightarrow$
+procesa filas nuevas $\rightarrow$ dibuja mapa, trayectoria y puntos de gas.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Operación} & \textbf{Dónde está} \\ \midrule
+ESP32 POST telemetría & firmware línea 387 \\
+ESP32 GET comandos & firmware línea 404 \\
+ESP32 PATCH procesado & firmware línea 427 \\
+APP GET lecturas & \texttt{useRobotData.ts} línea 94 \\
+APP POST comandos & \texttt{DashboardScreen.tsx} línea 45 \\ \bottomrule
+\end{tabular}
+\caption{Resumen de las operaciones HTTP}
+\end{table}
+
+\end{document}
