@@ -1,0 +1,343 @@
+%% ============================================================================
+%% Guia por funciones del firmware + formulas exactas
+%% Mismo formato que el reporte final del proyecto
+%% ============================================================================
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{times}
+\usepackage[spanish]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[hyphens]{url}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage{setspace}
+\usepackage{float}
+
+\geometry{left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+\setstretch{1.0}
+\linespread{1.0}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\Urlmuskip=0mu plus 2mu\relax
+\setlength{\emergencystretch}{2em}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\fontsize{10}{12}\selectfont \thepage}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{blue}\bfseries,
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{red},
+  breaklines=true,
+  frame=single,
+  numbers=none,
+  captionpos=b
+}
+
+\begin{document}
+
+\begin{center}
+{\fontsize{14}{16}\selectfont \textbf{Guía por funciones del firmware y ubicación de las fórmulas}}
+
+\vspace{-0.3cm}
+{\fontsize{10}{12}\selectfont Angel Armando Carreño González$^{1}$, Mtra. Alba Maribel Sánchez Gálvez$^{2}$}
+
+\vspace{-0.2cm}
+{\fontsize{10}{12}\selectfont Facultad de Ciencias de la Computación$^{1}$, Facultad de Ciencias de la Computación$^{2}$}
+
+\vspace{-0.2cm}
+{\fontsize{10}{12}\selectfont \textbf{Resumen}}
+\end{center}
+
+{\fontsize{10}{12}\selectfont
+\begin{itshape}
+\hspace{2cm}\parbox{\dimexpr\linewidth-4cm}{%
+Guía de estudio organizada por funciones del archivo RMA\_3S\_Mapa.ino:
+se describe qué hace cada función, en qué líneas está y en qué línea se
+aplica cada fórmula (distancia ultrasónica, gas, conversión del giroscopio,
+giros y odometría).
+}
+\end{itshape}
+}
+
+\vspace{0.3cm}
+
+\textbf{\large 1. Inventario de funciones}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Función} & \textbf{Líneas} & \textbf{Qué hace} \\ \midrule
+\texttt{initMPU()} & 85--94 & Configura el MPU6050 \\
+\texttt{leerGyroZ()} & 96--104 & Lee giro en Z y lo pasa a rad/s \\
+\texttt{motores(izq, der)} & 107--117 & Manda señales al L298N \\
+\texttt{parar()} & 119 & Detiene motores \\
+\texttt{medir(trig, echo)} & 122--129 & Mide distancia con un HC--SR04 \\
+\texttt{medirFrente()} & 131--143 & Mediana de 3 medidas frontales \\
+\texttt{medirLado()} & 145--148 & Mide un sensor lateral \\
+\texttt{leerGas()} & 151--171 & Filtro del MQ--2 \\
+\texttt{girar(grados)} & 178--207 & Gira a un ángulo con gyro \\
+\texttt{girarHastaDespejar()} & 212--240 & Gira hasta que el frente esté libre \\
+\texttt{esquivar()} & 245--279 & Decide por dónde salir \\
+\texttt{actualizarLED()} & 281--286 & Estado visual del LED \\
+\texttt{iniciar()} & 289--297 & Arranca el movimiento \\
+\texttt{ejecutarComando()} & 299--325 & Interpreta comandos \\
+\texttt{atenderSerial()} & 327--337 & Lee comandos por USB \\
+\texttt{agregarCabeceras()} & 340--345 & Cabeceras HTTP \\
+\texttt{conectarWiFi()} & 347--361 & Conecta WiFi \\
+\texttt{enviarTelemetria()} & 363--391 & POST a Supabase \\
+\texttt{revisarComandos()} & 393--431 & GET y PATCH a Supabase \\
+\texttt{descartarComandosViejos()} & 433--444 & Limpia comandos al arrancar \\
+\texttt{tareaTelemetria()} & 449--455 & Tarea FreeRTOS de POST \\
+\texttt{tareaComandos()} & 457--467 & Tarea FreeRTOS de GET \\
+\texttt{isrEncIzq(), isrEncDer()} & 470--471 & Interrupciones de encoders \\
+\texttt{setup()} & 473--521 & Inicialización \\
+\texttt{loop()} & 523--605 & Ciclo principal (odometría aquí) \\ \bottomrule
+\end{tabular}
+\caption{Todas las funciones del firmware}
+\end{table}
+
+\textbf{\large 2. Funciones del giroscopio}
+
+\textbf{\texttt{initMPU()} (líneas 85--94)}. Arranca el bus I2C con
+\texttt{Wire.begin()}, pone timeout de 100 ms, despierta el chip escribiendo
+0x00 en el registro 0x6B y configura $\pm 500$ dps escribiendo 0x08 en el
+registro 0x1B. No devuelve nada.
+
+\textbf{\texttt{leerGyroZ()} (líneas 96--104)}. Apunta al registro 0x47
+(GYRO\_ZOUT\_H), pide 2 bytes y los une en un \texttt{int16\_t} con signo.
+Devuelve \texttt{true} si la lectura fue válida.
+
+\begin{lstlisting}[language=C]
+int16_t raw = (Wire.read() << 8) | Wire.read();      // linea 101
+gyroZ = (raw / 65.5f) * DEG_TO_RAD;                   // linea 102  <-- FORMULA
+\end{lstlisting}
+
+\textbf{FÓRMULA 1 --- conversión del gyro (línea 102)}:
+$\omega_z = \dfrac{raw}{65{,}5}\cdot\dfrac{\pi}{180}$ rad/s.
+El 65.5 es $32768/500$ (cuentas por grado/s con escala $\pm 500$ dps).
+
+\textbf{\large 3. Funciones de motores}
+
+\textbf{\texttt{motores(izq, der)} (líneas 107--117)}. Recibe las velocidades
+deseadas (positivo = adelante, negativo = atrás), aplica los multiplicadores
+\texttt{SENTIDO\_IZQ} y \texttt{SENTIDO\_DER}, fija IN1/IN2 (o IN3/IN4) según
+el signo y manda el valor absoluto por PWM con \texttt{ledcWrite}.
+
+\textbf{\texttt{parar()} (línea 119)}. \texttt{motores(0,0)}: parada inmediata
+sin rampa, usada al detectar gas.
+
+\textbf{\large 4. Funciones de ultrasónico}
+
+\textbf{\texttt{medir(trig, echo)} (líneas 122--129)}. Emite un pulso de
+10 $\mu$s y mide el eco con \texttt{pulseIn} (timeout 18 ms). Si devuelve 0
+interpreta ``sin eco = vía libre''.
+
+\begin{lstlisting}[language=C]
+return us * 0.0343f / 2.0f;                          // linea 128  <-- FORMULA
+\end{lstlisting}
+
+\textbf{FÓRMULA 2 --- distancia ultrasónica (línea 128)}:
+$d = \dfrac{t\cdot 0{,}0343}{2}$ cm, donde 0.0343 es la velocidad del sonido
+en cm/$\mu$s y se divide entre 2 porque el sonido va y vuelve.
+
+\textbf{\texttt{medirFrente()} (líneas 131--143)}. Toma 3 muestras, descarta
+las $\leq 2$ cm y devuelve la mediana; si ninguna sirve, devuelve 300.
+
+\textbf{\texttt{medirLado()} (líneas 145--148)}. Una sola muestra; devuelve 0
+si es $\leq 2$ cm.
+
+\textbf{\large 5. Función del gas}
+
+\textbf{\texttt{leerGas()} (líneas 151--171)}. Muestrea cada 50 ms (20 Hz).
+Lee DO y AO, calcula ppm, y mantiene un registro de desplazamiento de 24 bits
+con el historial del DO.
+
+\begin{lstlisting}[language=C]
+ppm = (v - 0.8f) * 800.0f;                            // linea 160  <-- FORMULA
+histDO = (histDO << 1) | (nivelDO == HIGH ? 1UL : 0UL);  // linea 165
+for (int i = 0; i < 24; i++) altos += (histDO >> i) & 1UL; // linea 167
+if (doUtil && altos >= 20) gas = true;                // linea 169
+else if (altos <= 2) gas = false;                     // linea 170
+\end{lstlisting}
+
+\textbf{FÓRMULA 3 --- ppm estimado (línea 160)}: $ppm = (V_{AO}-0{,}8)\cdot 800$.
+Con el AO desconectado da 0, por eso la alarma real depende del DO.
+
+\textbf{FÓRMULA 4 --- filtro por mayoría (líneas 165--170)}: se cuentan los
+bits en HIGH de las últimas 24 muestras (1.2 s). Alarma con $\geq 20$ y
+liberación con $\leq 2$. Esto evita los falsos positivos por corriente de
+los motores.
+
+\textbf{\large 6. Funciones de giro y evasión}
+
+\textbf{\texttt{girar(grados)} (líneas 178--207)}. Gira en el sitio con motores
+opuestos hasta que el gyro acumula el ángulo pedido, con tope de seguridad.
+Dentro atiende comandos y lee gas para poder frenar. Al terminar actualiza
+\texttt{theta} con el ángulo MANDADO.
+
+\begin{lstlisting}[language=C]
+acum += gyroZ * (ahora - tp) / 1000.0f;              // linea 191  <-- FORMULA
+theta += grados * DEG_TO_RAD;                         // linea 204  <-- FORMULA
+\end{lstlisting}
+
+\textbf{FÓRMULA 5 --- integración del giro (línea 191)}:
+$\Delta\theta = \omega_z\cdot\Delta t$, con $\Delta t$ en segundos.
+
+\textbf{\texttt{girarHastaDespejar(sentido)} (líneas 212--240)}. Gira hasta
+que el frente supera 90 cm ($50\cdot1{,}8$), con mínimo de 12° y tope de
+3.5 s. Aquí \texttt{theta} se actualiza con el ángulo REAL medido (línea 237).
+
+\textbf{FÓRMULA 6 --- condición de despeje (líneas 227--228)}:
+$|\texttt{acum}| > 12^\circ$ \textbf{y} $\texttt{medirFrente()} > 50\cdot1{,}8 = 90$ cm.
+
+\textbf{\texttt{esquivar()} (líneas 245--279)}. Vuelve a medir el frente para
+descartar falsos ecos; si un lado supera 70 cm gira hacia ese lado; si no,
+hace 8 pasos de 45° y elige el mejor.
+
+\begin{lstlisting}[language=C]
+int giro = mejorPaso * 45;                            // linea 274  <-- FORMULA
+if (giro > 180) giro -= 360;                          // linea 275  <-- FORMULA
+\end{lstlisting}
+
+\textbf{FÓRMULA 7 --- rumbo más corto (líneas 274--275)}: convierte el ángulo
+del mejor paso al equivalente en $[-\pi,\pi]$ (por ejemplo 270° $\rightarrow -90^\circ$).
+
+\textbf{\large 7. Funciones de control y comandos}
+
+\textbf{\texttt{actualizarLED()} (281--286)}: parpadeo de 150 ms con gas,
+fijo en marcha, 800 ms en reposo.
+
+\textbf{\texttt{iniciar()} (289--297)}: para, pone \texttt{theta = 0},
+sincroniza los contadores de encoder con \texttt{prevIzq}/\texttt{prevDer},
+activa \texttt{moviendo} y responde \texttt{ACK:INI}. No hay calibración.
+
+\textbf{\texttt{ejecutarComando()} (299--325)}: interpreta \texttt{ini},
+\texttt{alto}, \texttt{ping}, \texttt{gasoff}, \texttt{gason} y \texttt{mq2}.
+
+\textbf{\texttt{atenderSerial()} (327--337)}: acumula caracteres hasta un
+salto de línea y ejecuta; se llama también dentro de los giros.
+
+\textbf{\large 8. Funciones de red}
+
+\textbf{\texttt{agregarCabeceras()} (340--345)}: añade \texttt{apikey},
+\texttt{Authorization: Bearer}, \texttt{Content-Type} y \texttt{Prefer}.
+
+\textbf{\texttt{conectarWiFi()} (347--361)}: intenta conexión hasta 20 s.
+
+\textbf{\texttt{enviarTelemetria()} (363--391)}: construye el JSON a mano y
+hace el POST (línea 387). \texttt{x\_cm} e \texttt{y\_cm} se multiplican por
+100 porque internamente están en metros.
+
+\textbf{\texttt{revisarComandos()} (393--431)}: GET (línea 404), extrae
+comando e id con \texttt{indexOf}, ejecuta y hace PATCH (línea 427).
+
+\textbf{\texttt{descartarComandosViejos()} (433--444)}: al arrancar marca
+todos los comandos pendientes como procesados.
+
+\textbf{\large 9. Tareas FreeRTOS}
+
+\textbf{\texttt{tareaTelemetria()} (449--455)}: duerme 100 ms y publica; el
+POST tarda ~1 s, por eso la telemetría sale cada ~1.2 s.
+
+\textbf{\texttt{tareaComandos()} (457--467)}: duerme 1 s y consulta; si no hay
+WiFi, reconecta cada 30 s.
+
+\textbf{\large 10. setup() y loop()}
+
+\texttt{setup()} (473--521) configura pines, PWM, interrupciones, gyro,
+WiFi, clientes TLS y crea las dos tareas en el núcleo 0. \texttt{loop()}
+(523--605) ejecuta el ciclo de sensado, decisión y movimiento.
+
+\newpage
+
+\textbf{\large 11. La odometría dentro de loop()}
+
+La odometría NO es una función aparte: está repartida en tres fragmentos de
+\texttt{loop()}. Aquí está la respuesta exacta a ``dónde se aplica la fórmula''.
+
+\textbf{11.1 Odometría por encoders --- líneas 535--540}
+
+\begin{lstlisting}[language=C]
+long ei = encIzq, ed = encDer;                              // 535
+float d = ((ei - prevIzq) + (ed - prevDer)) * 0.5f          // 536
+          * (2.0f * PI * 0.03f / 20.0f);
+prevIzq = ei; prevDer = ed;                                 // 537-538
+x += d * cos(theta);                                        // 539  <-- FORMULA
+y += d * sin(theta);                                        // 540  <-- FORMULA
+\end{lstlisting}
+
+\textbf{FÓRMULA 8 --- distancia por encoder (línea 536)}:
+$d = \dfrac{(\Delta i + \Delta d)}{2}\cdot\dfrac{2\pi(0{,}03)}{20}$ metros.
+El promedio de las dos ruedas da el avance del centro; el factor convierte
+pulsos a metros: radio 0.03 m, 20 pulsos por vuelta $\Rightarrow
+0{,}00942$ m/pulso (0.942 cm/pulso).
+
+\textbf{FÓRMULA 9 --- proyección al mapa (líneas 539--540)}:
+$x_{k+1} = x_k + d\cos\theta$, $y_{k+1} = y_k + d\sin\theta$.
+Es la ecuación 13.34 de \textit{Modern Robotics} (pág. 549 del libro,
+569 del PDF) más la integración $q_{k+1}=q_k+\Delta q$ (pág. 550 / PDF 570).
+
+\textbf{11.2 Rumbo con gyro --- líneas 562--571}
+
+\begin{lstlisting}[language=C]
+if (dtg > 0.0f && dtg < 0.3f) theta += (gyroZ - gyroBias) * dtg;  // 568
+\end{lstlisting}
+
+\textbf{FÓRMULA 10 --- rumbo (línea 568)}:
+$\theta_{k+1} = \theta_k + (\omega_z - b)\,\Delta t$, con $b$ = \texttt{gyroBias}.
+Se descartan saltos con $\Delta t > 0{,}3$ s.
+
+\textbf{11.3 Odometría por tiempo --- líneas 573--581}
+
+\begin{lstlisting}[language=C]
+float paso = (CM_POR_SEG / 100.0f) * dt;    // linea 578  <-- FORMULA
+x += paso * cos(theta);                      // linea 579
+y += paso * sin(theta);                      // linea 580
+\end{lstlisting}
+
+\textbf{FÓRMULA 11 --- distancia por tiempo (línea 578)}:
+$\texttt{paso} = \dfrac{25}{100}\,\Delta t = 0{,}25\,\Delta t$ metros.
+Se usa porque los encoders no reportan de forma confiable.
+
+\textbf{Nota importante}: las dos odometrías (11.1 y 11.3) suman al mismo
+tiempo. Hoy los encoders dan $d=0$ y solo aporta la de tiempo; si empezaran a
+contar, la distancia se duplicaría.
+
+\textbf{\large 12. Resumen de fórmulas}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Fórmula} & \textbf{Línea} & \textbf{Función} \\ \midrule
+$d = t\cdot0{,}0343/2$ & 128 & \texttt{medir()} \\
+$ppm=(V_{AO}-0{,}8)\cdot800$ & 160 & \texttt{leerGas()} \\
+filtro 20 de 24 & 165--170 & \texttt{leerGas()} \\
+$\omega_z=raw/65{,}5\cdot\pi/180$ & 102 & \texttt{leerGyroZ()} \\
+$\Delta\theta=\omega_z\Delta t$ & 191 & \texttt{girar()} \\
+giro mínimo + frente $>90$ cm & 227--228 & \texttt{girarHastaDespejar()} \\
+$\texttt{giro}=\texttt{paso}\cdot45$ & 274--275 & \texttt{esquivar()} \\
+$d=\text{promedio}\cdot2\pi(0{,}03)/20$ & 536 & \texttt{loop()} \\
+$x+=d\cos\theta,\ y+=d\sin\theta$ & 539--540 & \texttt{loop()} \\
+$\theta+=(\omega_z-b)\Delta t$ & 568 & \texttt{loop()} \\
+$\texttt{paso}=0{,}25\,\Delta t$ & 578 & \texttt{loop()} \\ \bottomrule
+\end{tabular}
+\caption{Dónde se aplica cada fórmula}
+\end{table}
+
+\end{document}
